@@ -1,5 +1,6 @@
 # at32f405-app
-![ ](picture/at32f405-tool.jpeg  "at32f405 tool")
+
+[![at32f405 tool](doc/at32f405-tool-small.jpeg)](doc/at32f405-tool.jpeg)
 
 This is an arm  debugger. The project consists of hardware, bootloader and application:
 
@@ -7,7 +8,7 @@ This is an arm  debugger. The project consists of hardware, bootloader and appli
 - [bootloader](https://github.com/koendv/at32f405-uf2boot)
 - [application](https://github.com/koendv/at32f405-app)
 
-This git is the debugger application. This is work in progress.
+This git is the debugger application. This is work in progress. The hardware is finished. A first preliminary software has been released.
 
 ## goal
 
@@ -30,11 +31,9 @@ A debugger that can be used
 - logic translators for target logic levels below 3.3V
 - QWIIC I2C connector
 
-The box is 3D printed in transparent resin, so the ambient light sensor is exposed to light.
+The box is 3D printed in transparent resin, so the ambient light sensor is exposed to light. The cable to connect to the target is a "JST SH 1.0mm to Dupont".
 
-[easyeda](https://easyeda.com/) was used to draw the schematic and the pcb. [jlcpcb](https://jlcpcb.com/) assembled the board and 3D-printed the enclosure.
-
-The hardware project is at [oshwlab](https://oshwlab.com/koendv/at32f405-tool).
+[easyeda](https://easyeda.com/) was used to draw the schematic and the pcb. [jlcpcb](https://jlcpcb.com/) assembled the board and 3D-printed the enclosure. The hardware project is at [oshwlab](https://oshwlab.com/koendv/at32f405-tool).
 
 ## bootloader
 
@@ -48,9 +47,9 @@ The bootloader is on [github](https://github.com/koendv/at32f405-uf2boot).
 
 The application is made of several open source projects.
 
-- [tinyuf2](https://github.com/adafruit/tinyuf2) uf2 loader
 - [CMSIS-DAP](https://github.com/ARM-software/CMSIS-DAP) debugger probe, for use with openocd
 - [Black Magic Debug](https://github.com/blackmagic-debug/blackmagic), for use with gdb or standalone
+- [tinyuf2](https://github.com/adafruit/tinyuf2) uf2 loader
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) usb protocol stack
 - [CherryDAP](https://github.com/cherry-embedded/CherryDAP) winusb descriptors
 - [RT-Thread](https://github.com/RT-Thread/rt-thread) operating system
@@ -128,7 +127,8 @@ If the high-speed usb is connected to a pc, a usb device appears. This time, the
 
 ## debugging
 
-To debug an AT32F405 program, openocd and black magic probe can be used
+This board uses an AT32F405 processor.
+To debug an AT32F405 processor, openocd and black magic probe can be used
 
 ### openocd
 
@@ -152,10 +152,12 @@ No. Att Driver
 (gdb) file rtthread.elf
 (gdb) where
 ```
+## changelog
+[Changelog](CHANGELOG.md) where I keep track of progress.
 
 ## links
-The following sites have been used to develop the board:
 
+- [P169H002](https://aliexpress.com/wholesale?SearchText=P169H002&sortType=total_tranpro_desc) capacitive touch screen
 - [easyeda](https://easyeda.com/) CAD software
 - [LCSC](https://www.lcsc.com/) and [SZLCSC](https://www.szlcsc.com/) electronics components
 - [jlcpcb](https://jlcpcb.com/) pcb assembly and 3D printing

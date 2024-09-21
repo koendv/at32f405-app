@@ -17,3 +17,4 @@ This is where I write down the progress of the project.
 - 2024-08-21 optimized touchscreen and display. no polling, no busy waiting, gesture decoding in hardware. uploaded video.
 - 2024-09-19 added winusb descriptors
 - 2024-09-21 source uploaded to github
+- 2024-09-22 The usb endpoints are ready. Black magic debug, CMSIS-DAP and tinyuf2 compile. Next connect usb cdc to  Black magic, usb dap to CMSIS-DAP, and usb-msc to tinyuf2.

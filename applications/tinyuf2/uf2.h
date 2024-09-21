@@ -44,24 +44,24 @@ SOFTWARE.
 #define UF2_INDEX_URL       "https://oshwlab.com/koendv/at32f405-tool"
 #define UF2_VOLUME_LABEL    "UF2BOOT"
 #define UF2_BOARD_ID        "GENERIC"
-#define BOARD_UF2_FAMILY_ID 0xDEADBEEF
+#define BOARD_UF2_FAMILY_ID 0xDABA1CA1 /* 0xDABA1CA1 大白菜 0xBA0B1DA0 刨笔刀 0xD1A0B1A0 掉膘 */
 
 // The largest flash size that is supported by the board, in bytes, default is 4MB
 // Flash size is constrained by RAM, a 4MB size requires 2kB RAM, see MAX_BLOCKS
 // Largest tested is 256MB, with 0x300000 blocks (1.5GB), 64 sectors per cluster
 #ifndef CFG_UF2_FLASH_SIZE
-    #define CFG_UF2_FLASH_SIZE          (4*1024*1024)
+#define CFG_UF2_FLASH_SIZE (4 * 1024 * 1024)
 #endif
 
 // Number of 512-byte blocks in the exposed filesystem, default is just under 32MB
 // The filesystem needs space for the current file, text files, uploaded file, and FAT
 #ifndef CFG_UF2_NUM_BLOCKS
-    #define CFG_UF2_NUM_BLOCKS          (0x10109)
+#define CFG_UF2_NUM_BLOCKS (0x10109)
 #endif
 
 // Sectors per FAT cluster, must be increased proportionally for larger filesystems
 #ifndef CFG_UF2_SECTORS_PER_CLUSTER
-    #define CFG_UF2_SECTORS_PER_CLUSTER (1)
+#define CFG_UF2_SECTORS_PER_CLUSTER (1)
 #endif
 
 //--------------------------------------------------------------------+
@@ -69,25 +69,27 @@ SOFTWARE.
 //--------------------------------------------------------------------+
 
 // All entries are little endian.
-#define UF2_MAGIC_START0    0x0A324655UL // "UF2\n"
-#define UF2_MAGIC_START1    0x9E5D5157UL // Randomly selected
-#define UF2_MAGIC_END       0x0AB16F30UL // Ditto
+#define UF2_MAGIC_START0 0x0A324655UL // "UF2\n"
+#define UF2_MAGIC_START1 0x9E5D5157UL // Randomly selected
+#define UF2_MAGIC_END    0x0AB16F30UL // Ditto
 
 // If set, the block is "comment" and should not be flashed to the device
-#define UF2_FLAG_NOFLASH    0x00000001
-#define UF2_FLAG_FAMILYID   0x00002000
+#define UF2_FLAG_NOFLASH  0x00000001
+#define UF2_FLAG_FAMILYID 0x00002000
 
 #define MAX_BLOCKS (CFG_UF2_FLASH_SIZE / 256 + 100)
-typedef struct {
+typedef struct
+{
     uint32_t numBlocks;
     uint32_t numWritten;
 
-    bool aborted;             // aborting update and reset
+    bool aborted; // aborting update and reset
 
     uint8_t writtenMask[MAX_BLOCKS / 8 + 1];
 } WriteState;
 
-typedef struct {
+typedef struct
+{
     // 32 byte header
     uint32_t magicStart0;
     uint32_t magicStart1;
