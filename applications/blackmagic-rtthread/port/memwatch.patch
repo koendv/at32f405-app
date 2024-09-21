@@ -1,0 +1,235 @@
+commit 5082ccc3e5fb6a02d0d6c192163e00ccfb5f6553
+Author: Koen De Vleeschauwer <kdv@kdvelectronics.eu>
+Date:   Wed Apr 17 13:16:30 2024 +0200
+
+    memwatch
+
+diff --git a/src/include/general.h b/src/include/general.h
+index 83a2e3a3..3ce9abbb 100644
+--- a/src/include/general.h
++++ b/src/include/general.h
+@@ -21,6 +21,9 @@
+ #ifndef INCLUDE_GENERAL_H
+ #define INCLUDE_GENERAL_H
+ 
++#include <time.h>
++#include <strings.h>
++
+ #if !defined(__cplusplus) && defined(__STDC__)
+ #if __STDC__ == 1
+ #define BMD_IS_STDC 1
+diff --git a/src/include/memwatch.h b/src/include/memwatch.h
+new file mode 100644
+index 00000000..6140c0e5
+--- /dev/null
++++ b/src/include/memwatch.h
+@@ -0,0 +1,32 @@
++#ifndef MEMWATCH_H
++#define MEMWATCH_H
++
++#include <stdint.h>
++#include <stdbool.h>
++#include <target.h>
++
++#define MEMWATCH_NUM 8
++/* string length has to be long enough to store an address 0x20000000 */
++#define MEMWATCH_STRLEN 12
++
++typedef enum memwatch_format {
++	MEMWATCH_FMT_SIGNED,
++	MEMWATCH_FMT_UNSIGNED,
++	MEMWATCH_FMT_FLOAT,
++	MEMWATCH_FMT_HEX
++} memwatch_format_e;
++
++typedef struct {
++	uint32_t addr;
++	uint32_t value;
++	char name[MEMWATCH_STRLEN];
++	memwatch_format_e format;
++	int32_t precision;
++} memwatch_s;
++
++extern memwatch_s memwatch_table[MEMWATCH_NUM];
++extern uint32_t memwatch_cnt;
++extern bool memwatch_timestamp;
++extern void poll_memwatch(target_s *cur_target);
++
++#endif
+diff --git a/src/memwatch.c b/src/memwatch.c
+new file mode 100644
+index 00000000..5df1b62a
+--- /dev/null
++++ b/src/memwatch.c
+@@ -0,0 +1,55 @@
++#include "general.h"
++#include "gdb_packet.h"
++#include "memwatch.h"
++#include "rtt_if.h"
++#if PC_HOSTED == 1
++#include <unistd.h>
++#endif
++
++memwatch_s memwatch_table[MEMWATCH_NUM];
++uint32_t memwatch_cnt = 0;
++bool memwatch_timestamp = false;
++
++void poll_memwatch(target_s *cur_target)
++{
++	union val32_u {
++		uint32_t i;
++		volatile float f;
++	} val;
++
++	char buf[64];
++	char timestamp[64];
++	uint32_t len;
++	if (!cur_target || (memwatch_cnt == 0))
++		return;
++
++	for (uint32_t i = 0; i < memwatch_cnt; i++) {
++		if (!target_mem32_read(cur_target, &val.i, memwatch_table[i].addr, sizeof(val.i)) &&
++			(val.i != memwatch_table[i].value)) {
++			if (memwatch_timestamp)
++				snprintf(timestamp, sizeof(timestamp), "%" PRIu32 " ", platform_time_ms());
++			else
++				timestamp[0] = '\0';
++			switch (memwatch_table[i].format) {
++			case MEMWATCH_FMT_SIGNED:
++				len = snprintf(buf, sizeof(buf), "%s%s %" PRId32 "\r\n", timestamp, memwatch_table[i].name, val.i);
++				break;
++			case MEMWATCH_FMT_UNSIGNED:
++				len = snprintf(buf, sizeof(buf), "%s%s %" PRIu32 "\r\n", timestamp, memwatch_table[i].name, val.i);
++				break;
++			case MEMWATCH_FMT_FLOAT:
++				len = snprintf(buf, sizeof(buf), "%s%s %.*g\r\n", timestamp, memwatch_table[i].name,
++					memwatch_table[i].precision, val.f);
++				break;
++			case MEMWATCH_FMT_HEX:
++			default:
++				len = snprintf(buf, sizeof(buf), "%s%s 0x%" PRIx32 "\r\n", timestamp, memwatch_table[i].name, val.i);
++				break;
++			}
++			buf[sizeof(buf) - 1] = '\0';
++			rtt_write(buf, len);
++			memwatch_table[i].value = val.i;
++		}
++	}
++	return;
++}
+diff --git a/src/target/cortexm.c b/src/target/cortexm.c
+index fa6fe025..df4e4d70 100644
+--- a/src/target/cortexm.c
++++ b/src/target/cortexm.c
+@@ -41,15 +41,25 @@
+ #include "command.h"
+ #include "gdb_packet.h"
+ #include "semihosting.h"
++#ifdef ENABLE_MEMWATCH
++#include "memwatch.h"
++#include <ctype.h>
++#endif
+ #include "platform.h"
+ #include "maths_utils.h"
+ 
+ #include <assert.h>
+ 
+ static bool cortexm_vector_catch(target_s *target, int argc, const char **argv);
++#ifdef ENABLE_MEMWATCH
++static bool cortexm_memwatch(target_s *target, int argc, const char **argv);
++#endif
+ 
+ const command_s cortexm_cmd_list[] = {
+ 	{"vector_catch", cortexm_vector_catch, "Catch exception vectors"},
++#ifdef ENABLE_MEMWATCH
++	{"memwatch", cortexm_memwatch, "Read memory while target running: [/t] [[NAME] [/d|/u|/f|/f[0..9]|/x] ADDRESS]..."},
++#endif
+ 	{NULL, NULL, NULL},
+ };
+ 
+@@ -1354,6 +1364,85 @@ static bool cortexm_vector_catch(target_s *target, int argc, const char **argv)
+ 	return true;
+ }
+ 
++#ifdef ENABLE_MEMWATCH
++static bool cortexm_memwatch(target_s *target, int argc, const char **argv)
++{
++	memwatch_format_e fmt = MEMWATCH_FMT_HEX;
++	char name[MEMWATCH_STRLEN] = {0};
++	int precision = 0;
++	char ch;
++	memset(memwatch_table, 0, sizeof(memwatch_table));
++	memwatch_cnt = 0;
++	memwatch_timestamp = false;
++	/* target has to support debugger memory access while running */
++	if (target_mem_access_needs_halt(target)) {
++		gdb_out("memwatch not supported for target\n");
++		return true;
++	}
++	for (int32_t i = 1; i < argc; i++) {
++		if (argv[i][0] == '/') {
++			/* format follows */
++			switch (argv[i][1]) {
++			case 'd':
++				fmt = MEMWATCH_FMT_SIGNED;
++				break;
++			case 'u':
++				fmt = MEMWATCH_FMT_UNSIGNED;
++				break;
++			case 'f':
++				fmt = MEMWATCH_FMT_FLOAT;
++#if PC_HOSTED == 1
++				precision = 6;
++#else
++				precision = -1;
++#endif
++				ch = argv[i][2];
++				if ((ch >= '0') && (ch <= '9'))
++					precision = ch - '0';
++				break;
++			case 'x':
++				fmt = MEMWATCH_FMT_HEX;
++				break;
++			case 't':
++				memwatch_timestamp = true;
++				break;
++			default:
++				break;
++			}
++		} else if (isalpha(argv[i][0])) {
++			/* name  follows */
++			strncpy(name, argv[i], sizeof(name));
++			name[sizeof(name) - 1] = '\0';
++		} else if (isdigit(argv[i][0])) {
++			/* address follows */
++			uint32_t addr = strtoul(argv[i], NULL, 0);
++
++			/* add new name, format and address to memwatch table */
++			if (name[0] == '\0') {
++				/* no name given, use address as name */
++				snprintf(name, MEMWATCH_STRLEN, "0x%08" PRIx32, addr);
++				name[MEMWATCH_STRLEN - 1] = '\0';
++			}
++			memwatch_table[memwatch_cnt].addr = addr;
++			memwatch_table[memwatch_cnt].value = 0xdeadbeef;
++			memwatch_table[memwatch_cnt].format = fmt;
++			memwatch_table[memwatch_cnt].precision = precision;
++			memcpy(memwatch_table[memwatch_cnt].name, name, MEMWATCH_STRLEN);
++			memwatch_cnt++;
++			memset(name, 0, sizeof(name));
++			gdb_outf("0x%08" PRIx32 " ", addr);
++			if (memwatch_cnt == MEMWATCH_NUM)
++				break;
++		} else {
++			gdb_outf("?");
++			break;
++		}
++	}
++	gdb_outf("\n");
++	return true;
++}
++#endif
++
+ static bool cortexm_hostio_request(target_s *const target)
+ {
+ 	/* Read out the information from the target needed to complete the request */

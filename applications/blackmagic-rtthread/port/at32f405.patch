@@ -1,0 +1,76 @@
+diff --git a/src/target/at32f43x.c b/src/target/at32f43x.c
+index 53552f5b..95da505d 100644
+--- a/src/target/at32f43x.c
++++ b/src/target/at32f43x.c
+@@ -71,6 +71,8 @@ static bool at32f43_mass_erase(target_s *target);
+ #define AT32F4x_IDCODE_PART_MASK   0x00000fffU
+ #define AT32F43_SERIES_4K          0x70084000U
+ #define AT32F43_SERIES_2K          0x70083000U
++#define AT32F405_SERIES_256        0x70053000U
++#define AT32F405_SERIES_128        0x70042000U
+ 
+ typedef struct at32f43_flash {
+ 	target_flash_s target_flash;
+@@ -202,6 +204,52 @@ static bool at32f43_detect(target_s *target, const uint16_t part_id)
+ 	return true;
+ }
+ 
++/* at32f402, at32f405 */
++
++static bool at32f405_detect(target_s *target, const uint16_t part_id)
++{
++	uint32_t flash_size_bank1 = 0;
++	const uint32_t sector_size = 2048U;
++
++	switch (part_id) {
++	case 0x0240U: // AT32F405RCT7 / LQFP64
++	case 0x0242U: // AT32F405RCT7-7 / LQFP64
++	case 0x0244U: // AT32F405CCT7 / LQFP48
++	case 0x0246U: // AT32F405CCU7 / QFN48
++	case 0x0248U: // AT32F405KCU7-4 / QFN32
++	case 0x024AU: // AT32F402RCT7 / LQFP64
++	case 0x024CU: // AT32F402RCT7-7 / LQFP64
++	case 0x024EU: // AT32F402CCT7 / LQFP48
++	case 0x0250U: // AT32F402CCU7 / QFN48
++	case 0x0252U: // AT32F402KCU7-4 / QFN32
++		// Flash (C): 256 KiB / 2 KiB per block
++		flash_size_bank1 = 256U * 1024U;
++		break;
++	case 0x01C1U: // AT32F405RBT7 / LQFP64
++	case 0x01C3U: // AT32F405RBT7-7 / LQFP64
++	case 0x01C5U: // AT32F405CBT7 / LQFP48
++	case 0x01C7U: // AT32F405CBU7 / QFN48
++	case 0x01C9U: // AT32F405KBU7-4 / QFN32
++	case 0x01CBU: // AT32F402RBT7 / LQFP64
++	case 0x01CDU: // AT32F402RBT7-7 / LQFP64
++	case 0x01CFU: // AT32F402CBT7 / LQFP48
++	case 0x01D1U: // AT32F402CBU7 / QFN48
++	case 0x01D3U: // AT32F402KBU7-4 / QFN32
++		// Flash (C): 128 KiB / 2 KiB per block
++		flash_size_bank1 = 128U * 1024U;
++		break;
++	default:
++		return false;
++	}
++	at32f43_add_flash(target, 0x08000000, flash_size_bank1, sector_size, 0, AT32F43x_FLASH_BANK1_REG_OFFSET);
++	// All parts have 96 KiB SRAM
++	target_add_ram32(target, 0x20000000, 96U * 1024U);
++	target->driver = "AT32F402/405";
++	target->part_id = part_id;
++	target->mass_erase = at32f43_mass_erase;
++	return true;
++}
++
+ /* Identify AT32F43x "High Performance" line devices (Cortex-M4) */
+ bool at32f43x_probe(target_s *target)
+ {
+@@ -216,6 +264,9 @@ bool at32f43x_probe(target_s *target)
+ 
+ 	if (series == AT32F43_SERIES_4K || series == AT32F43_SERIES_2K)
+ 		return at32f43_detect(target, part_id);
++	if (series == AT32F405_SERIES_256 || series == AT32F405_SERIES_128)
++		return at32f405_detect(target, part_id);
++
+ 	return false;
+ }
+ 

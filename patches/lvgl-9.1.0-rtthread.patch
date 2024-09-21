@@ -1,0 +1,66 @@
+--- env_support/rt-thread/lv_rt_thread_port.c.ORIG	2024-08-24 08:48:29.994089781 +0200
++++ env_support/rt-thread/lv_rt_thread_port.c	2024-08-23 21:05:11.252939222 +0200
+@@ -13,6 +13,7 @@
+ 
+ #include <lvgl.h>
+ #include <rtthread.h>
++#include "lvgl_touchpad.h"
+ 
+ #define DBG_TAG    "LVGL"
+ #define DBG_LVL    DBG_INFO
+@@ -44,28 +45,44 @@
+ static rt_uint8_t lvgl_thread_stack[PKG_LVGL_THREAD_STACK_SIZE];
+ 
+ #if LV_USE_LOG
+-static void lv_rt_log(const char *buf)
++static void lv_rt_log(lv_log_level_t level, const char * buf)
+ {
++    (void) level;
+     LOG_I(buf);
+ }
+ #endif /* LV_USE_LOG */
+ 
++rt_mutex_t lvgl_mutex;
++
++void lv_lock()
++{
++    rt_mutex_take(lvgl_mutex, RT_WAITING_FOREVER);
++}
++
++void lv_unlock()
++{
++    rt_mutex_release(lvgl_mutex);
++}
++
+ static void lvgl_thread_entry(void *parameter)
+ {
+ #if LV_USE_LOG
+     lv_log_register_print_cb(lv_rt_log);
+ #endif /* LV_USE_LOG */
+     lv_init();
++    lv_tick_set_cb(&rt_tick_get_millisecond);
+     lv_port_disp_init();
+     lv_port_indev_init();
+     lv_user_gui_init();
+ 
+-    lv_tick_set_cb(&rt_tick_get_millisecond);
+ 
+     /* handle the tasks of LVGL */
+     while(1)
+     {
++        lv_lock();
++        touchpad_events();
+         lv_task_handler();
++        lv_unlock();
+         rt_thread_mdelay(PKG_LVGL_DISP_REFR_PERIOD);
+     }
+ }
+@@ -74,6 +91,8 @@
+ {
+     rt_err_t err;
+ 
++    lvgl_mutex = rt_mutex_create("lvgl", RT_IPC_FLAG_PRIO);
++
+     err = rt_thread_init(&lvgl_thread, "LVGL", lvgl_thread_entry, RT_NULL,
+            &lvgl_thread_stack[0], sizeof(lvgl_thread_stack), PKG_LVGL_THREAD_PRIO, 10);
+     if(err != RT_EOK)

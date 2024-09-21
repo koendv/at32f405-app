@@ -1,0 +1,10 @@
+--- src/misc/lv_event.h.ORIG	2024-08-23 18:32:22.380937511 +0200
++++ src/misc/lv_event.h	2024-08-23 18:32:24.475970682 +0200
+@@ -47,6 +47,7 @@
+     LV_EVENT_PRESSING,            /**< The object is being pressed (called continuously while pressing)*/
+     LV_EVENT_PRESS_LOST,          /**< The object is still being pressed but slid cursor/finger off of the object */
+     LV_EVENT_SHORT_CLICKED,       /**< The object was pressed for a short period of time, then released it. Not called if scrolled.*/
++    LV_EVENT_DOUBLE_CLICKED,      /**< The object was pressed twice in a short period of time.*/
+     LV_EVENT_LONG_PRESSED,        /**< Object has been pressed for at least `long_press_time`.  Not called if scrolled.*/
+     LV_EVENT_LONG_PRESSED_REPEAT, /**< Called after `long_press_time` in every `long_press_repeat_time` ms.  Not called if scrolled.*/
+     LV_EVENT_CLICKED,             /**< Called on release if not scrolled (regardless to long press)*/

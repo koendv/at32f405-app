@@ -1,0 +1,84 @@
+diff --git a/bsp/at32/libraries/rt_drivers/drv_dma.h b/bsp/at32/libraries/rt_drivers/drv_dma.h
+index 1bab214014..1eece64ce3 100644
+--- a/bsp/at32/libraries/rt_drivers/drv_dma.h
++++ b/bsp/at32/libraries/rt_drivers/drv_dma.h
+@@ -31,6 +31,7 @@ struct dma_config {
+     dma_type *dma_x;
+     rt_uint8_t channel_index;
+     rt_bool_t dma_done;
++    rt_sem_t dma_sem;
+     dma_channel_type *dma_channel;
+     crm_periph_clock_type dma_clock;
+     IRQn_Type dma_irqn;
+diff --git a/bsp/at32/libraries/rt_drivers/drv_spi.c b/bsp/at32/libraries/rt_drivers/drv_spi.c
+index 16125ddd46..b9543be2b8 100644
+--- a/bsp/at32/libraries/rt_drivers/drv_spi.c
++++ b/bsp/at32/libraries/rt_drivers/drv_spi.c
+@@ -24,6 +24,8 @@
+ #error "Please define at least one BSP_USING_SPIx"
+ #endif
+ 
++#define TIMEOUT_TICKS RT_TICK_PER_SECOND
++
+ //#define DRV_DEBUG
+ #define LOG_TAG             "drv.pwm"
+ #include <drv_log.h>
+@@ -415,6 +417,9 @@ static rt_ssize_t xfer(struct rt_spi_device* device, struct rt_spi_message* mess
+             {
+                 _spi_dma_receive(instance, (uint8_t *)recv_buf, send_length);
+                 _spi_dma_transmit(instance, (uint8_t *)send_buf, send_length);
++                /* wait for dma */
++                rt_sem_take(instance->config->dma_tx->dma_sem, TIMEOUT_TICKS);
++                rt_sem_take(instance->config->dma_rx->dma_sem, TIMEOUT_TICKS);
+                 /* wait transfer complete */
+                 while(spi_i2s_flag_get(instance->config->spi_x, SPI_I2S_BF_FLAG) != RESET);
+                 while((instance->config->dma_tx->dma_done == RT_FALSE) || (instance->config->dma_rx->dma_done == RT_FALSE));
+@@ -430,9 +435,12 @@ static rt_ssize_t xfer(struct rt_spi_device* device, struct rt_spi_message* mess
+         }
+         else if (message->send_buf)
+         {
+-            if (instance->config->spi_dma_flag & RT_DEVICE_FLAG_DMA_TX)
++            /* for small packets polling is faster than dma */
++            if (instance->config->spi_dma_flag & RT_DEVICE_FLAG_DMA_TX & (send_length > 4))
+             {
+                 _spi_dma_transmit(instance, (uint8_t *)send_buf, send_length);
++                /* wait for dma */
++                rt_sem_take(instance->config->dma_tx->dma_sem, TIMEOUT_TICKS);
+                 /* wait transfer complete */
+                 while(spi_i2s_flag_get(instance->config->spi_x, SPI_I2S_BF_FLAG) != RESET);
+                 while(instance->config->dma_tx->dma_done == RT_FALSE);
+@@ -459,6 +467,9 @@ static rt_ssize_t xfer(struct rt_spi_device* device, struct rt_spi_message* mess
+             {
+                 _spi_dma_receive(instance, (uint8_t *)recv_buf, send_length);
+                 _spi_dma_transmit(instance, (uint8_t *)recv_buf, send_length);
++                /* wait for dma */
++                rt_sem_take(instance->config->dma_tx->dma_sem, TIMEOUT_TICKS);
++                rt_sem_take(instance->config->dma_rx->dma_sem, TIMEOUT_TICKS);
+                 /* wait transfer complete */
+                 while(spi_i2s_flag_get(instance->config->spi_x, SPI_I2S_BF_FLAG) != RESET);
+                 while((instance->config->dma_tx->dma_done == RT_FALSE) || (instance->config->dma_rx->dma_done == RT_FALSE));
+@@ -494,6 +505,7 @@ static void _dma_base_channel_check(struct at32_spi *instance)
+     if(instance->config->spi_dma_flag & RT_DEVICE_FLAG_DMA_RX)
+     {
+         instance->config->dma_rx->dma_done = RT_TRUE;
++        instance->config->dma_rx->dma_sem = rt_sem_create("spi rx", 0, RT_IPC_FLAG_FIFO);
+         instance->config->dma_rx->dma_x = (dma_type *)((rt_uint32_t)rx_channel & ~0xFF);
+         instance->config->dma_rx->channel_index = ((((rt_uint32_t)rx_channel & 0xFF) - 8) / 0x14) + 1;
+     }
+@@ -501,6 +513,7 @@ static void _dma_base_channel_check(struct at32_spi *instance)
+     if(instance->config->spi_dma_flag & RT_DEVICE_FLAG_DMA_TX)
+     {
+         instance->config->dma_tx->dma_done = RT_TRUE;
++        instance->config->dma_tx->dma_sem = rt_sem_create("spi tx", 0, RT_IPC_FLAG_FIFO);
+         instance->config->dma_tx->dma_x = (dma_type *)((rt_uint32_t)tx_channel & ~0xFF);
+         instance->config->dma_tx->channel_index = ((((rt_uint32_t)tx_channel & 0xFF) - 8) / 0x14) + 1;
+     }
+@@ -589,6 +602,8 @@ void dma_isr(struct dma_config *dma_instance)
+         dma_channel_enable(dma_instance->dma_channel, FALSE);
+         /* mark done flag */
+         dma_instance->dma_done = RT_TRUE;
++        /* release semaphore */
++        rt_sem_release(dma_instance->dma_sem);
+     }
+ }
+ 
