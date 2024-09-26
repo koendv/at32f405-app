@@ -5,7 +5,7 @@
 #include <stdbool.h>
 
 /*!< endpoint address */
-#define BUSID          0
+#define BUSID0      0
 #define DAP_IN_EP   0x81
 #define DAP_OUT_EP  0x01
 #define CDC0_IN_EP  0x82
@@ -16,6 +16,12 @@
 #define CDC1_INT_EP 0x85
 #define MSC_IN_EP   0x86
 #define MSC_OUT_EP  0x06
+
+/*!< interface number */
+#define DAP_INTF  0x00
+#define CDC0_INTF 0x01
+#define CDC1_INTF 0x03
+#define MSC_INTF  0x05
 
 #define CONFIG_USB_HS 1
 

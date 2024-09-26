@@ -134,7 +134,7 @@ void chry_dap_handle()
             if ((uint16_t)(USB_RequestCountI - USB_RequestCountO) != DAP_PACKET_COUNT)
             {
                 USB_RequestIdle = 0U;
-                usbd_ep_start_read(BUSID, DAP_OUT_EP, USB_Request[USB_RequestIndexI], DAP_PACKET_SIZE);
+                usbd_ep_start_read(BUSID0, DAP_OUT_EP, USB_Request[USB_RequestIndexI], DAP_PACKET_SIZE);
             }
         }
 
@@ -158,7 +158,7 @@ void chry_dap_handle()
                 }
                 USB_ResponseCountO++;
                 USB_ResponseIdle = 0U;
-                usbd_ep_start_write(BUSID, DAP_IN_EP, USB_Response[n], USB_RespSize[n]);
+                usbd_ep_start_write(BUSID0, DAP_IN_EP, USB_Response[n], USB_RespSize[n]);
             }
         }
     }
@@ -168,7 +168,11 @@ void dap_task()
 {
     DAP_Setup();
     chry_dap_state_init();
-    chry_dap_handle();
+    while (1)
+    {
+        chry_dap_handle();
+        rt_thread_delay(10); // XXX bad
+    }
 }
 
 int app_dap_init(void)

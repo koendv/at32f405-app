@@ -4,6 +4,12 @@
 #include "usb_desc.h"
 #include "usb_cdc.h"
 
+// logging
+#if 1
+#undef USB_LOG_RAW
+#define USB_LOG_RAW(...)
+#endif
+
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t cdc0_read_buffer[CDC_MAX_MPS];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t cdc1_read_buffer[CDC_MAX_MPS];
 USB_NOCACHE_RAM_SECTION USB_MEM_ALIGNX uint8_t write_buffer[2048]; // XXX
@@ -66,12 +72,12 @@ void usbd_cdc1_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 
 void usbd_cdc_acm_set_dtr(uint8_t busid, uint8_t intf, bool dtr)
 {
-    if (intf == 0)
+    if (intf == CDC0_INTF)
     {
         USB_LOG_RAW("cdc0 intf %d dtr:%d\r\n", intf, dtr);
         cdc0_dtr = dtr;
     }
-    else if (intf == 2)
+    else if (intf == CDC1_INTF)
     {
         USB_LOG_RAW("cdc1 intf %d dtr:%d\r\n", intf, dtr);
         cdc1_dtr = dtr;
@@ -96,7 +102,7 @@ void cdc0_acm_data_send(uint8_t *buf, uint32_t nbytes)
 {
     if (!cdc0_dtr) return;
     ep_tx_busy_flag = true;
-    usbd_ep_start_write(BUSID, CDC0_IN_EP, buf, nbytes);
+    usbd_ep_start_write(BUSID0, CDC0_IN_EP, buf, nbytes);
     // XXX fixme - replace busy waiting with semaphore
     while (ep_tx_busy_flag)
     {
@@ -107,10 +113,10 @@ void cdc1_acm_data_send(uint8_t *buf, uint32_t nbytes)
 {
     if (!cdc1_dtr) return;
     ep_tx_busy_flag = true;
-    usbd_ep_start_write(BUSID, CDC1_IN_EP, buf, nbytes);
+    usbd_ep_start_write(BUSID0, CDC1_IN_EP, buf, nbytes);
     while (ep_tx_busy_flag)
     {
-    // XXX fixme - replace busy waiting with semaphore
+        // XXX fixme - replace busy waiting with semaphore
     }
 }
 
