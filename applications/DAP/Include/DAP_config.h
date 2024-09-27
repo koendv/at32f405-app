@@ -383,20 +383,24 @@ __STATIC_INLINE void PORT_SWD_SETUP(void)
     rt_pin_mode(SWCLK_PIN, PIN_MODE_OUTPUT);
 #ifdef SWCLK_DIR_PIN
     rt_pin_write(SWCLK_DIR_PIN, PIN_HIGH);
+    rt_pin_mode(SWCLK_DIR_PIN, PIN_MODE_OUTPUT);
 #endif
 
     rt_pin_write(SWDIO_PIN, PIN_HIGH);
     rt_pin_mode(SWDIO_PIN, PIN_MODE_OUTPUT);
 #ifdef TMS_DIR_PIN
     rt_pin_write(SWDIO_DIR_PIN, PIN_HIGH);
+    rt_pin_mode(SWDIO_DIR_PIN, PIN_MODE_OUTPUT);
 #endif
 
 #ifdef NRST_OUT_PIN
     rt_pin_write(NRST_OUT_PIN, PIN_LOW); // inverting transistor
+    rt_pin_mode(NRST_OUT_PIN, PIN_MODE_OUTPUT);
 #endif
 
 #ifdef TARGET_OE_PIN
     rt_pin_write(TARGET_OE_PIN, PIN_LOW); // enable SWD/JTAG output
+    rt_pin_mode(TARGET_OE_PIN, PIN_MODE_OUTPUT);
 #endif
 }
 
@@ -437,8 +441,7 @@ __STATIC_INLINE void PORT_OFF(void)
 */
 __STATIC_FORCEINLINE uint32_t PIN_SWCLK_TCK_IN(void)
 {
-    uint32_t s = rt_pin_read(SWCLK_PIN);
-    return (s);
+    return (rt_pin_read(SWCLK_PIN) == PIN_HIGH);
 }
 
 /** SWCLK/TCK I/O pin: Set Output to High.
@@ -465,8 +468,7 @@ __STATIC_FORCEINLINE void PIN_SWCLK_TCK_CLR(void)
 */
 __STATIC_FORCEINLINE uint32_t PIN_SWDIO_TMS_IN(void)
 {
-    uint32_t s = rt_pin_read(SWDIO_PIN);
-    return (s);
+    return (rt_pin_read(SWDIO_PIN) == PIN_HIGH);
 }
 
 /** SWDIO/TMS I/O pin: Set Output to High.
@@ -490,8 +492,7 @@ __STATIC_FORCEINLINE void PIN_SWDIO_TMS_CLR(void)
 */
 __STATIC_FORCEINLINE uint32_t PIN_SWDIO_IN(void)
 {
-    uint32_t s = rt_pin_read(SWDIO_PIN);
-    return (s);
+    return (rt_pin_read(SWDIO_PIN) == PIN_HIGH);
 }
 
 /** SWDIO I/O pin: Set Output (used in SWD mode only).
@@ -508,8 +509,8 @@ called prior \ref PIN_SWDIO_OUT function calls.
 */
 __STATIC_FORCEINLINE void PIN_SWDIO_OUT_ENABLE(void)
 {
-    rt_pin_mode(SWDIO_PIN, PIN_MODE_OUTPUT);
     rt_pin_write(SWDIO_DIR_PIN, PIN_HIGH);
+    rt_pin_mode(SWDIO_PIN, PIN_MODE_OUTPUT);
 }
 
 /** SWDIO I/O pin: Switch to Input mode (used in SWD mode only).
@@ -530,8 +531,7 @@ __STATIC_FORCEINLINE void PIN_SWDIO_OUT_DISABLE(void)
 */
 __STATIC_FORCEINLINE uint32_t PIN_TDI_IN(void)
 {
-    uint32_t s = rt_pin_read(TDI_PIN);
-    return (s);
+    return (rt_pin_read(TDI_PIN) == PIN_HIGH);
 }
 
 /** TDI I/O pin: Set Output.
@@ -550,8 +550,7 @@ __STATIC_FORCEINLINE void PIN_TDI_OUT(uint32_t bit)
 */
 __STATIC_FORCEINLINE uint32_t PIN_TDO_IN(void)
 {
-    uint32_t s = rt_pin_read(TDO_PIN);
-    return (s);
+    return (rt_pin_read(TDO_PIN) == PIN_HIGH);
 }
 
 
@@ -582,8 +581,7 @@ __STATIC_FORCEINLINE void PIN_nTRST_OUT(uint32_t bit)
 */
 __STATIC_FORCEINLINE uint32_t PIN_nRESET_IN(void)
 {
-    uint32_t s = rt_pin_read(NRST_IN_PIN);
-    return (s);
+    return (rt_pin_read(NRST_IN_PIN) == PIN_HIGH);
 }
 
 /** nRESET I/O pin: Set Output.

@@ -79,7 +79,7 @@ bool platform_nrst_get_val(void)
 const char *platform_target_voltage(void)
 {
 	rt_adc_device_t adc_dev;
-	uint32_t target_vio_millivolt = 0;
+	uint32_t target_vio_mv = 0;
 	static char target_vio_str[8];
 	static char err_str[8] = "?";
 
@@ -88,8 +88,8 @@ const char *platform_target_voltage(void)
 		return err_str;
 
 	/* ADC_REF_VOLTAGE / 4095 * (10k + 4.7k) / 10k; calibrated */
-	target_vio_millivolt = rt_adc_read(adc_dev, ADC_VIO_CHANNEL) * 4902 / 4095;
-	snprintf(target_vio_str, sizeof(target_vio_str), "%d.%03dV", target_vio_millivolt / 1000, target_vio_millivolt % 1000);
+	target_vio_mv = rt_adc_read(adc_dev, ADC_VIO_CHANNEL) * 4902 / 4095; /* millivolt */
+	snprintf(target_vio_str, sizeof(target_vio_str), "%d.%03dV", target_vio_mv / 1000, target_vio_mv % 1000);
 
 	return target_vio_str;
 }
@@ -139,3 +139,10 @@ void debug_serial_send_stdout(const uint8_t *const data, const size_t len)
 {
 	cdc1_acm_data_send((uint8_t *)data, len);
 }
+
+void vtarget(int argc, char **argv)
+{
+	rt_kprintf("vio: %s\r\n", platform_target_voltage());
+}
+
+MSH_CMD_EXPORT(vtarget, target voltage);

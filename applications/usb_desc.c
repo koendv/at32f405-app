@@ -6,8 +6,10 @@
 #include "usbd_core.h"
 #include "usbd_cdc.h"
 #include "usbd_msc.h"
-#include "DAP_config.h"
+#include "dap_config.h"
 #include "usb_desc.h"
+
+#define DAP_PACKET_SIZE DAP_CONFIG_PACKET_SIZE
 
 // logging
 #if 1
@@ -191,13 +193,13 @@ struct usb_bos_descriptor bos_desc = {
     .string     = USBD_BinaryObjectStoreDescriptor,
     .string_len = USBD_BOS_WTOTALLENGTH};
 
-static uint8_t serial_number[13] = {0};
+uint8_t usb_serial_number[13] = {0};
 
 static const char *string_descriptors[] = {
     (const char[]){0x09, 0x04}, /* Langid */
     "CherryUSB", /* Manufacturer */
     "Magic CMSIS-DAP", /* Product */
-    serial_number, /* Serial Number */
+    usb_serial_number, /* Serial Number */
     "oshwlab.com/koendv/at32f405-tool", /* WEBUSB */
     "CMSIS-DAP", /* CMSIS-DAP probe */
     "GDB", /* GDB Server */
@@ -222,12 +224,12 @@ static const uint8_t *device_quality_descriptor_callback(uint8_t speed)
 
 #define MCU_ID1 (0x1FFFF7E8)
 
-static void get_serial_number()
+static void get_usb_serial_number()
 {
     /* unique device ID (96 bits) stored at 0x1FFFF7E8 */
     uint16_t *uid = (uint16_t *)MCU_ID1;
-    snprintf(serial_number, sizeof(serial_number), "%04X%04X%04X", uid[1] + uid[5], uid[0] + uid[4], uid[3]);
-    serial_number[sizeof(serial_number) - 1] = '\0';
+    snprintf(usb_serial_number, sizeof(usb_serial_number), "%04X%04X%04X", uid[1] + uid[5], uid[0] + uid[4], uid[3]);
+    usb_serial_number[sizeof(usb_serial_number) - 1] = '\0';
     return;
 }
 
@@ -237,7 +239,7 @@ static const char *string_descriptor_callback(uint8_t speed, uint8_t index)
     {
         return NULL;
     }
-    if (serial_number[0] == '\0') get_serial_number();
+    if (usb_serial_number[0] == '\0') get_usb_serial_number();
     return string_descriptors[index];
 }
 

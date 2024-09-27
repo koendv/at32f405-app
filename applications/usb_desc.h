@@ -4,8 +4,10 @@
 #include <rtthread.h>
 #include <stdbool.h>
 
-/*!< endpoint address */
+/*!< usb bus number */
 #define BUSID0      0
+
+/*!< endpoint address */
 #define DAP_IN_EP   0x81
 #define DAP_OUT_EP  0x01
 #define CDC0_IN_EP  0x82
