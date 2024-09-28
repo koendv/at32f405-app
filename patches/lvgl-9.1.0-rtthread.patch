@@ -1,5 +1,5 @@
---- env_support/rt-thread/lv_rt_thread_port.c.ORIG	2024-08-24 08:48:29.994089781 +0200
-+++ env_support/rt-thread/lv_rt_thread_port.c	2024-08-23 21:05:11.252939222 +0200
+--- env_support/rt-thread/lv_rt_thread_port.c.ORIG	2024-09-28 12:04:11.070013788 +0200
++++ env_support/rt-thread/lv_rt_thread_port.c	2024-09-29 08:04:35.486831067 +0200
 @@ -13,6 +13,7 @@
  
  #include <lvgl.h>
@@ -64,3 +64,11 @@
      err = rt_thread_init(&lvgl_thread, "LVGL", lvgl_thread_entry, RT_NULL,
             &lvgl_thread_stack[0], sizeof(lvgl_thread_stack), PKG_LVGL_THREAD_PRIO, 10);
      if(err != RT_EOK)
+@@ -85,6 +104,6 @@
+ 
+     return 0;
+ }
+-INIT_ENV_EXPORT(lvgl_thread_init);
++INIT_APP_EXPORT(lvgl_thread_init);
+ 
+ #endif /*__RTTHREAD__*/
