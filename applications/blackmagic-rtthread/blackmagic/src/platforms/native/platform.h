@@ -135,6 +135,14 @@ extern int hwversion;
 #define NRST_SENSE_PIN  HW_SWITCH(6, GPIO7, GPIO13)
 
 /*
+ * SWO comes in on PB7 (TIM4 CH2) before HW6, and PA10 (TIM1 CH3) after -
+ * however, because of Shenanigans™ with timers and other pins, this has to
+ * reuse TDO (PA6, TIM3 CH1) to not wind up clobbering timers and timer pins
+ */
+#define SWO_PORT GPIOA
+#define SWO_PIN  GPIO6
+
+/*
  * These are the control output pin definitions for TPWR.
  * TPWR is sensed via PB0 by sampling ADC1's channel 8.
  */
@@ -252,7 +260,8 @@ extern int hwversion;
 #define IRQ_PRI_USBUSART     (2U << 4U)
 #define IRQ_PRI_USBUSART_DMA (2U << 4U)
 #define IRQ_PRI_USB_VBUS     (14U << 4U)
-#define IRQ_PRI_TRACE        (0U << 4U)
+#define IRQ_PRI_SWO_TIM      (0U << 4U)
+#define IRQ_PRI_SWO_DMA      (0U << 4U)
 
 #define USBUSART        HW_SWITCH(6, USBUSART1, USBUSART2)
 #define USBUSART_IRQ    HW_SWITCH(6, NVIC_USART1_IRQ, NVIC_USART2_IRQ)
@@ -276,7 +285,7 @@ extern int hwversion;
 #define USBUSART1_DMA_TX_ISR(x) dma1_channel4_isr(x)
 #define USBUSART1_DMA_RX_CHAN   DMA_CHANNEL5
 #define USBUSART1_DMA_RX_IRQ    NVIC_DMA1_CHANNEL5_IRQ
-#define USBUSART1_DMA_RX_ISR(x) dma1_channel5_isr(x)
+#define USBUSART1_DMA_RX_ISR(x) usart1_rx_dma_isr(x)
 
 #define USBUSART2               USART2
 #define USBUSART2_IRQ           NVIC_USART2_IRQ
@@ -288,14 +297,46 @@ extern int hwversion;
 #define USBUSART2_DMA_RX_IRQ    NVIC_DMA1_CHANNEL6_IRQ
 #define USBUSART2_DMA_RX_ISR(x) dma1_channel6_isr(x)
 
-#define TRACE_TIM          TIM3
-#define TRACE_TIM_CLK_EN() rcc_periph_clock_enable(RCC_TIM3)
-#define TRACE_IRQ          NVIC_TIM3_IRQ
-#define TRACE_ISR(x)       tim3_isr(x)
+/* Use TIM3 Input 1 (from PA6/TDO) for Manchester data recovery */
+#define SWO_TIM TIM3
+#define SWO_TIM_CLK_EN()
+#define SWO_TIM_IRQ         NVIC_TIM3_IRQ
+#define SWO_TIM_ISR(x)      tim3_isr(x)
+#define SWO_IC_IN           TIM_IC_IN_TI1
+#define SWO_IC_RISING       TIM_IC1
+#define SWO_CC_RISING       TIM3_CCR1
+#define SWO_ITR_RISING      TIM_DIER_CC1IE
+#define SWO_STATUS_RISING   TIM_SR_CC1IF
+#define SWO_IC_FALLING      TIM_IC2
+#define SWO_CC_FALLING      TIM3_CCR2
+#define SWO_STATUS_FALLING  TIM_SR_CC2IF
+#define SWO_STATUS_OVERFLOW (TIM_SR_CC1OF | TIM_SR_CC2OF)
+#define SWO_TRIG_IN         TIM_SMCR_TS_TI1FP1
+
+/* Use PA10 (USART1) on HW6+ for UART/NRZ/Async data recovery */
+#define SWO_UART        HW_SWITCH(6, 0U, USART1)
+#define SWO_UART_CLK    RCC_USART1
+#define SWO_UART_DR     USART1_DR
+#define SWO_UART_PORT   GPIOA
+#define SWO_UART_RX_PIN GPIO10
+
+#define SWO_DMA_BUS    DMA1
+#define SWO_DMA_CLK    RCC_DMA1
+#define SWO_DMA_CHAN   DMA_CHANNEL5
+#define SWO_DMA_IRQ    NVIC_DMA1_CHANNEL5_IRQ
+#define SWO_DMA_ISR(x) swo_dma_isr(x)
 
 #define SET_RUN_STATE(state)   running_status = (state)
 #define SET_IDLE_STATE(state)  gpio_set_val(LED_PORT, LED_IDLE_RUN, state)
 #define SET_ERROR_STATE(state) gpio_set_val(LED_PORT, LED_ERROR, state)
+
+/*
+ * These are bounce declarations for the ISR handlers competing for dma1_channel5_isr().
+ * The actual handler is defined in platform.c, the USART1 RX handler in aux_serial.c,
+ * and the SWO DMA handler in swo_uart.c.
+ */
+void usart1_rx_dma_isr(void);
+void swo_dma_isr(void);
 
 /* Frequency constants (in Hz) for the bitbanging routines */
 #define BITBANG_CALIBRATED_FREQS

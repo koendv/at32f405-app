@@ -51,7 +51,6 @@ void gdb_putpacket_f(const char *packet, ...) GDB_FORMAT_ATTR;
 void gdb_put_notification(const char *packet, size_t size);
 #define gdb_put_notificationz(packet) gdb_put_notification((packet), strlen(packet))
 
-void gdb_outn(const char *buf, const size_t buf_len);
 void gdb_out(const char *buf);
 void gdb_voutf(const char *fmt, va_list);
 void gdb_outf(const char *fmt, ...) GDB_FORMAT_ATTR;

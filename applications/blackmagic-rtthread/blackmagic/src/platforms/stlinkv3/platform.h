@@ -32,12 +32,15 @@
 #include <libopencm3/stm32/f1/memorymap.h>
 #include <libopencm3/usb/usbd.h>
 
+#define PLATFORM_HAS_TRACESWO
+#define SWO_ENCODING 2 /* Use only UART mode SWO recovery */
+
 #if ENABLE_DEBUG == 1
 #define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
 #endif
 
-#define PLATFORM_IDENT "STLINK-V3 "
+#define PLATFORM_IDENT "(ST-Link v3) "
 
 #define BOOTMAGIC0 0xb007da7aU
 #define BOOTMAGIC1 0xbaadfeedU
@@ -61,8 +64,11 @@ extern bool debug_bmp;
 #define SWDIO_PIN     TMS_PIN
 #define SWCLK_PIN     TCK_PIN
 
-#define SRST_PORT GPIOA
-#define SRST_PIN  GPIO6
+#define NRST_PORT GPIOA
+#define NRST_PIN  GPIO6
+
+#define SWO_PORT GPIOD
+#define SWO_PIN  GPIO2
 
 #define TMS_DRIVE_PORT GPIOA
 #define TMS_DRIVE_PIN  GPIO7
@@ -79,12 +85,8 @@ extern bool debug_bmp;
 #define MCO1_PIN  GPIO8
 #define MCO1_AF   0
 
-#define PLATFORM_HAS_TRACESWO 1
-#define NUM_TRACE_PACKETS     (16)
-#define TRACESWO_PROTOCOL     2 /* 1 = Manchester, 2 = NRZ / async */
-
 #define SWDIO_MODE_REG      GPIO_MODER(TMS_PORT)
-#define SWDIO_MODE_REG_MULT (1 << (9 << 1))
+#define SWDIO_MODE_REG_MULT (1U << (9U << 1U))
 
 #define TMS_SET_MODE()                                                    \
 	gpio_mode_setup(TMS_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, TMS_PIN); \
@@ -182,8 +184,8 @@ extern const struct _usbd_driver stm32f723_usb_driver;
 /* This DMA channel is set by the USART in use */
 #define SWO_DMA_BUS    DMA1
 #define SWO_DMA_CLK    RCC_DMA1
-#define SWO_DMA_CHAN   DMA_CHANNEL4
-#define SWO_DMA_STREAM DMA_STREAM0
+#define SWO_DMA_CHAN   DMA_STREAM0
+#define SWO_DMA_TRG    DMA_SxCR_CHSEL_4
 #define SWO_DMA_IRQ    NVIC_DMA1_STREAM0_IRQ
 #define SWO_DMA_ISR(x) dma1_stream0_isr(x)
 

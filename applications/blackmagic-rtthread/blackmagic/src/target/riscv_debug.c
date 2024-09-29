@@ -1,7 +1,7 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
  * Written by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -49,35 +49,42 @@
  * https://github.com/riscv/riscv-debug-spec/blob/master/riscv-debug-stable.pdf
  */
 
-#define RV_DM_CONTROL 0x10U
-#define RV_DM_STATUS  0x11U
-#define RV_DM_NEXT_DM 0x1dU
+#define RV_DM_CONTROL      0x10U
+#define RV_DM_STATUS       0x11U
+#define RV_DM_NEXT_DM      0x1dU
+#define RV_DM_PROGBUF_BASE 0x20U
 
-#define RV_DM_CTRL_ACTIVE          0x00000001U
+#define RV_DM_CTRL_ACTIVE          (1U << 0U)
+#define RV_DM_CTRL_SYSTEM_RESET    (1U << 1U)
 #define RV_DM_CTRL_HARTSEL_MASK    0x03ffffc0U
 #define RV_DM_CTRL_HARTSELLO_MASK  0x03ff0000U
 #define RV_DM_CTRL_HARTSELHI_MASK  0x0000ffc0U
-#define RV_DM_CTRL_HALT_REQ        0x80000000U
-#define RV_DM_CTRL_RESUME_REQ      0x40000000U
-#define RV_DM_CTRL_HART_RESET      0x20000000U
-#define RV_DM_CTRL_HART_ACK_RESET  0x10000000U
-#define RV_DM_CTRL_SYSTEM_RESET    0x00000002U
+#define RV_DM_CTRL_HART_ACK_RESET  (1U << 28U)
+#define RV_DM_CTRL_HART_RESET      (1U << 29U)
+#define RV_DM_CTRL_RESUME_REQ      (1U << 30U)
+#define RV_DM_CTRL_HALT_REQ        (1U << 31U)
 #define RV_DM_CTRL_HARTSELLO_SHIFT 16U
 #define RV_DM_CTRL_HARTSELHI_SHIFT 4U
 
-#define RV_DM_STAT_ALL_RESUME_ACK 0x00020000U
-#define RV_DM_STAT_NON_EXISTENT   0x00004000U
-#define RV_DM_STAT_ALL_HALTED     0x00000200U
-#define RV_DM_STAT_ALL_RESET      0x00080000U
+#define RV_DM_STAT_ALL_HALTED     (1U << 9U)
+#define RV_DM_STAT_UNAVAILABLE    (1U << 12U)
+#define RV_DM_STAT_NON_EXISTENT   (1U << 14U)
+#define RV_DM_STAT_ALL_RESUME_ACK (1U << 17U)
+#define RV_DM_STAT_ALL_RESET      (1U << 19U)
 
-#define RV_DM_ABST_STATUS_BUSY       0x00001000U
-#define RV_DM_ABST_STATUS_DATA_COUNT 0x0000000fU
+#define RV_DM_ABST_STATUS_BUSY              (1U << 12U)
+#define RV_DM_ABST_STATUS_DATA_COUNT        0x0000000fU
+#define RV_DM_ABST_STATUS_PROGBUFSIZE_MASK  0x1f000000U
+#define RV_DM_ABST_STATUS_PROGBUFSIZE_SHIFT 24U
 
 #define RV_DM_SYSBUS_STATUS_ADDR_WIDTH_MASK 0x00000fe0U
 
 #define RV_CSR_FORCE_MASK   0xc000U
 #define RV_CSR_FORCE_32_BIT 0x4000U
 #define RV_CSR_FORCE_64_BIT 0x8000U
+#define RV_CSR_TYPE_MASK    0x3000U
+#define RV_CSR_TYPE_GPR     0x1000U
+#define RV_CSR_ADDR_MASK    0x0fffU
 
 /* The following is a set of CSR address definitions */
 /* misa -> The Hart's machine ISA register */
@@ -101,6 +108,20 @@
 #define RV_TRIG_DATA_1 0x7a1U
 /* tdata2 -> selected trigger configuration register 2 */
 #define RV_TRIG_DATA_2 0x7a2U
+
+/* GPR a0, aka x10 is used as a bounce buffer for our progbuf CSR I/O */
+#define RV_GPR_A0 0x100aU
+
+/*
+ * Instructions for reading and writing CSRs through a0
+ * CSRR -> CSR Read, abuses the CSRRS atomic read and set bits instruction
+ * CSRW -> CSR Write, abuses the CSRRW atomic read/write instruction
+ * In the case of CSRRS, if the rs1 register is x0, no write is performed.
+ * In the case of CSRRW, if the rd register is x0, no read is performed.
+ */
+#define RV_CSRR_A0 0x00002573U
+#define RV_CSRW_A0 0x00051073U
+#define RV_EBREAK  0x00100073U
 
 #define RV_ISA_EXTENSIONS_MASK 0x03ffffffU
 
@@ -142,6 +163,7 @@ static const char *const riscv_gpr_names[RV_GPRS_COUNT] = {
 };
 
 // clang-format on
+
 typedef struct riscv_csr_descriptor {
 	const char *name;
 	const uint32_t csr_number; // fits in 16 bits actually (?)
@@ -257,9 +279,6 @@ static uint32_t riscv_hart_discover_isa(riscv_hart_s *hart);
 static void riscv_hart_discover_triggers(riscv_hart_s *hart);
 static void riscv_hart_memory_access_type(riscv_hart_s *hart);
 
-static bool riscv_attach(target_s *target);
-static void riscv_detach(target_s *target);
-
 static const char *riscv_target_description(target_s *target);
 
 static bool riscv_check_error(target_s *target);
@@ -339,6 +358,11 @@ static void riscv_dm_init(riscv_dm_s *const dbg_module)
 		/* If the hart doesn't exist, the spec says to terminate scan */
 		if (status & RV_DM_STAT_NON_EXISTENT)
 			break;
+		/* If the hart is not available, skip it */
+		if (status & RV_DM_STAT_UNAVAILABLE) {
+			DEBUG_INFO("Skipping hart %" PRIu32 " -> Unavailable\n", hart_idx);
+			continue;
+		}
 
 		riscv_hart_s *hart = calloc(1, sizeof(*hart));
 		if (!hart) { /* calloc failed: heap exhaustion */
@@ -363,6 +387,8 @@ static uint8_t riscv_isa_address_width(const uint32_t isa)
 		return 64U;
 	case 3:
 		return 128U;
+	default:
+		break;
 	}
 	DEBUG_INFO("Unknown address width, defaulting to 32\n");
 	return 32U;
@@ -430,6 +456,9 @@ static bool riscv_hart_init(riscv_hart_s *const hart)
 	/* If the hart implements mvendorid, this gives us the JEP-106, otherwise use the DTM designer code */
 	target->designer_code = hart->vendorid ? hart->vendorid : hart->dbg_module->dmi_bus->designer_code;
 	target->cpuid = hart->archid;
+	/* If the DMI bus is provided via ADI, grab the AP's partno for the target */
+	if (hart->dbg_module->dmi_bus->dev_index == 0xffU && hart->dbg_module->dmi_bus->idle_cycles == 0xffU)
+		target->part_id = ((riscv_dmi_ap_s *)hart->dbg_module->dmi_bus)->ap->partno;
 
 	/* Now we're in a safe environment, leasurely read out the triggers, etc. */
 	riscv_hart_discover_triggers(hart);
@@ -510,6 +539,8 @@ static riscv_debug_version_e riscv_dm_version(const uint32_t status)
 	case 3:
 		DEBUG_INFO("RISC-V debug v1.0 DM\n");
 		return RISCV_DEBUG_1_0;
+	default:
+		break;
 	}
 	DEBUG_INFO("Please report part with unknown RISC-V debug DM version %x\n", version);
 	return RISCV_DEBUG_UNKNOWN;
@@ -523,8 +554,12 @@ static inline void riscv_dmi_ref(riscv_dmi_s *const dmi)
 static inline void riscv_dmi_unref(riscv_dmi_s *const dmi)
 {
 	--dmi->ref_count;
-	if (!dmi->ref_count)
+	if (!dmi->ref_count) {
+		/* Check if the DMI bus is on an AP */
+		if (dmi->dev_index == 0xffU && dmi->idle_cycles == 0xffU)
+			adiv5_ap_unref(((riscv_dmi_ap_s *)dmi)->ap);
 		free(dmi);
+	}
 }
 
 static void riscv_dm_ref(riscv_dm_s *const dbg_module)
@@ -549,9 +584,11 @@ static uint32_t riscv_hart_discover_isa(riscv_hart_s *const hart)
 	uint32_t data_registers = 0;
 	if (!riscv_dm_read(hart->dbg_module, RV_DM_ABST_CTRLSTATUS, &data_registers))
 		return 0U;
-	/* And use the data count bits to divine an initial guess on the platform width */
+	/* Extract the program buffer size in DM registers */
+	hart->progbuf_size = (data_registers & RV_DM_ABST_STATUS_PROGBUFSIZE_MASK) >> RV_DM_ABST_STATUS_PROGBUFSIZE_SHIFT;
+	/* Now use the data count bits to divine an initial guess on the platform width */
 	data_registers &= RV_DM_ABST_STATUS_DATA_COUNT;
-	DEBUG_INFO("Hart has %" PRIu32 " data registers\n", data_registers);
+	DEBUG_INFO("Hart has %" PRIu32 " data registers and %u progbuf registers\n", data_registers, hart->progbuf_size);
 	/* Check we have at least enough data registers for arg0 */
 	if (data_registers >= 4)
 		hart->access_width = 128U;
@@ -629,16 +666,8 @@ bool riscv_command_wait_complete(riscv_hart_s *const hart)
 	return hart->status == RISCV_HART_NO_ERROR;
 }
 
-bool riscv_csr_read(riscv_hart_s *const hart, const uint16_t reg, void *const data)
+static bool riscv_csr_read_data(riscv_hart_s *const hart, void *const data, const uint8_t access_width)
 {
-	const uint8_t access_width = (reg & RV_CSR_FORCE_MASK) ? riscv_csr_access_width(reg) : hart->access_width;
-	DEBUG_TARGET("Reading %u-bit CSR %03x\n", access_width, reg & ~RV_CSR_FORCE_MASK);
-	/* Set up the register read and wait for it to complete */
-	if (!riscv_dm_write(hart->dbg_module, RV_DM_ABST_COMMAND,
-			RV_DM_ABST_CMD_ACCESS_REG | RV_ABST_READ | RV_REG_XFER | riscv_hart_access_width(access_width) |
-				(reg & ~RV_CSR_FORCE_MASK)) ||
-		!riscv_command_wait_complete(hart))
-		return false;
 	uint32_t *const value = (uint32_t *)data;
 	/* If we're doing a 128-bit read, grab the upper-most 2 uint32_t's */
 	if (access_width == 128U &&
@@ -652,26 +681,132 @@ bool riscv_csr_read(riscv_hart_s *const hart, const uint16_t reg, void *const da
 	return riscv_dm_read(hart->dbg_module, RV_DM_DATA0, value);
 }
 
+static bool riscv_csr_progbuf_read(riscv_hart_s *const hart, const uint16_t reg, void *const data)
+{
+	/* Set up the program buffer to read out the target CSR */
+	if (!riscv_dm_write(hart->dbg_module, RV_DM_PROGBUF_BASE + 0U, RV_CSRR_A0 | ((reg & RV_CSR_ADDR_MASK) << 20U)))
+		return false;
+	/* If there's more than one progbuf register, set the second to an ebreak */
+	if (hart->progbuf_size > 1U && !riscv_dm_write(hart->dbg_module, RV_DM_PROGBUF_BASE + 1U, RV_EBREAK))
+		return false;
+
+	/* Execute the program buffer we've set up, reading a0 out to keep it safe */
+	bool result = riscv_dm_write(hart->dbg_module, RV_DM_ABST_COMMAND,
+		RV_DM_ABST_CMD_ACCESS_REG | RV_ABST_READ | RV_REG_XFER | RV_ABST_POSTEXEC |
+			riscv_hart_access_width(hart->access_width) | RV_GPR_A0);
+	/* Wait for both the register read and progbuf execution to complete */
+	result &= riscv_command_wait_complete(hart);
+	/* Extract the data read out by the GPR read */
+	uint32_t a0_value[3];
+	result &= riscv_csr_read_data(hart, a0_value, hart->access_width);
+	/* Now try to read out the requested data from a0 at the requested size */
+	result &= riscv_csr_read(hart, RV_GPR_A0 | (reg & RV_CSR_FORCE_MASK), data);
+	/* Whatever happened, now put back a0 from before */
+	return riscv_csr_write(hart, RV_GPR_A0, a0_value) && result;
+}
+
+bool riscv_csr_read(riscv_hart_s *const hart, const uint16_t reg, void *const data)
+{
+	const uint8_t access_width = (reg & RV_CSR_FORCE_MASK) ? riscv_csr_access_width(reg) : hart->access_width;
+	DEBUG_TARGET("Reading %u-bit CSR %03x\n", access_width, reg & ~RV_CSR_FORCE_MASK);
+	/* If the read must be completed using the progbuf mechanism, switch to doing that */
+	if ((hart->flags & RV_HART_FLAG_DATA_GPR_ONLY) && (reg & RV_CSR_TYPE_MASK) != RV_CSR_TYPE_GPR)
+		return riscv_csr_progbuf_read(hart, reg, data);
+	/* Set up the register read and wait for it to complete */
+	if (!riscv_dm_write(hart->dbg_module, RV_DM_ABST_COMMAND,
+			RV_DM_ABST_CMD_ACCESS_REG | RV_ABST_READ | RV_REG_XFER | riscv_hart_access_width(access_width) |
+				(reg & ~RV_CSR_FORCE_MASK)) ||
+		!riscv_command_wait_complete(hart)) {
+		/*
+		 * Figure out why the read failed - if it's because the command requested is unsupported,
+		 * then restart and use the program buffer mechanism instead, marking the hart as supporting
+		 * only GPR access using abstract commands. NB: we have no recourse if no progbuf regs are implemented.
+		 */
+		if (hart->status == RISCV_HART_NOT_SUPP && (reg & RV_CSR_TYPE_MASK) != RV_CSR_TYPE_GPR &&
+			hart->progbuf_size > 0U) {
+			hart->flags |= RV_HART_FLAG_DATA_GPR_ONLY;
+			return riscv_csr_read(hart, reg, data);
+		}
+		return false;
+	}
+	return riscv_csr_read_data(hart, data, access_width);
+}
+
+static bool riscv_csr_write_data(riscv_hart_s *const hart, const void *const data, const uint8_t access_width)
+{
+	const uint32_t *const value = (const uint32_t *)data;
+	/* Regardless of width, we have to write data0 */
+	if (!riscv_dm_write(hart->dbg_module, RV_DM_DATA0, value[0]))
+		return false;
+	/* If we're doing at least a 64-bit wide access, set up data1 */
+	if (access_width >= 64U && !riscv_dm_write(hart->dbg_module, RV_DM_DATA1, value[1]))
+		return false;
+	/* For a 128-bit access, set up data2 and data3 too */
+	if (access_width == 128 &&
+		!(riscv_dm_write(hart->dbg_module, RV_DM_DATA2, value[2]) &&
+			riscv_dm_write(hart->dbg_module, RV_DM_DATA3, value[3])))
+		return false;
+	return true;
+}
+
+static bool riscv_csr_progbuf_write(riscv_hart_s *const hart, const uint16_t reg, const void *const data)
+{
+	/* Read out a0 to keep it safe as the actions below clobber it */
+	uint32_t a0_value[3];
+	if (!riscv_csr_read(hart, RV_GPR_A0, a0_value))
+		return false;
+
+	/* Set up the program buffer to write to the target CSR */
+	if (!riscv_dm_write(hart->dbg_module, RV_DM_PROGBUF_BASE + 0U, RV_CSRW_A0 | ((reg & RV_CSR_ADDR_MASK) << 20U)))
+		return false;
+	/* If there's more than one progbuf register, set the second to an ebreak */
+	if (hart->progbuf_size > 1U && !riscv_dm_write(hart->dbg_module, RV_DM_PROGBUF_BASE + 1U, RV_EBREAK))
+		return false;
+
+	/* Figure out what access width should be used for the data phase of this */
+	const uint8_t access_width = (reg & RV_CSR_FORCE_MASK) ? riscv_csr_access_width(reg) : hart->access_width;
+	/* Set up the data for the write */
+	if (!riscv_csr_write_data(hart, data, access_width))
+		return false;
+	/* Execute the program buffer we've set up, writing the data into a0 first */
+	bool result = riscv_dm_write(hart->dbg_module, RV_DM_ABST_COMMAND,
+		RV_DM_ABST_CMD_ACCESS_REG | RV_ABST_WRITE | RV_REG_XFER | RV_ABST_POSTEXEC |
+			riscv_hart_access_width(access_width) | RV_GPR_A0);
+	/* Wait for both the register write and progbuf execution to complete */
+	result &= riscv_command_wait_complete(hart);
+	/* Whatever happened, now put back a0 from before */
+	return riscv_csr_write(hart, RV_GPR_A0, a0_value) && result;
+}
+
 bool riscv_csr_write(riscv_hart_s *const hart, const uint16_t reg, const void *const data)
 {
 	const uint8_t access_width = (reg & RV_CSR_FORCE_MASK) ? riscv_csr_access_width(reg) : hart->access_width;
 	DEBUG_TARGET("Writing %u-bit CSR %03x\n", access_width, reg & ~RV_CSR_FORCE_MASK);
+	/* If the write must be completed using the progbuf mechanism, switch to doing that */
+	if ((hart->flags & RV_HART_FLAG_DATA_GPR_ONLY) && (reg & RV_CSR_TYPE_MASK) != RV_CSR_TYPE_GPR)
+		return riscv_csr_progbuf_write(hart, reg, data);
 	/* Set up the data registers based on the Hart native access size */
-	const uint32_t *const value = (const uint32_t *)data;
-	if (!riscv_dm_write(hart->dbg_module, RV_DM_DATA0, value[0]))
-		return false;
-	if (access_width >= 64U && !riscv_dm_write(hart->dbg_module, RV_DM_DATA1, value[1]))
-		return false;
-	if (access_width == 128 &&
-		!(riscv_dm_write(hart->dbg_module, RV_DM_DATA2, value[2]) &&
-			riscv_dm_write(hart->dbg_module, RV_DM_DATA3, value[3])))
+	if (!riscv_csr_write_data(hart, data, access_width))
 		return false;
 	/* Configure and run the write */
 	if (!riscv_dm_write(hart->dbg_module, RV_DM_ABST_COMMAND,
 			RV_DM_ABST_CMD_ACCESS_REG | RV_ABST_WRITE | RV_REG_XFER | riscv_hart_access_width(access_width) |
 				(reg & ~RV_CSR_FORCE_MASK)))
 		return false;
-	return riscv_command_wait_complete(hart);
+	if (!riscv_command_wait_complete(hart)) {
+		/*
+		 * Figure out why the write failed - if it's because the command requested is unsupported,
+		 * then restart and use the program buffer mechanism instead, marking the hart as supporting
+		 * only GPR access using abstract commands. NB: we have no recourse if no progbuf regs are implemented.
+		 */
+		if (hart->status == RISCV_HART_NOT_SUPP && (reg & RV_CSR_TYPE_MASK) != RV_CSR_TYPE_GPR &&
+			hart->progbuf_size > 0U) {
+			hart->flags |= RV_HART_FLAG_DATA_GPR_ONLY;
+			return riscv_csr_write(hart, reg, data);
+		}
+		return false;
+	}
+	return true;
 }
 
 uint8_t riscv_mem_access_width(const riscv_hart_s *const hart, const target_addr_t address, const size_t length)
@@ -789,8 +924,10 @@ riscv_match_size_e riscv_breakwatch_match_size(const size_t size)
 		return RV_MATCH_SIZE_112_BIT;
 	case 128U:
 		return RV_MATCH_SIZE_128_BIT;
+	default:
+		break;
 	}
-	return 0;
+	return 0U;
 }
 
 bool riscv_config_trigger(riscv_hart_s *const hart, const uint32_t trigger, const riscv_trigger_state_e mode,
@@ -811,7 +948,7 @@ bool riscv_config_trigger(riscv_hart_s *const hart, const uint32_t trigger, cons
 	return result;
 }
 
-static bool riscv_attach(target_s *const target)
+bool riscv_attach(target_s *const target)
 {
 	riscv_hart_s *const hart = riscv_hart_struct(target);
 	/* If the DMI requires special preparation, do that first */
@@ -825,7 +962,7 @@ static bool riscv_attach(target_s *const target)
 	return true;
 }
 
-static void riscv_detach(target_s *const target)
+void riscv_detach(target_s *const target)
 {
 	riscv_hart_s *const hart = riscv_hart_struct(target);
 	/* Once we get done and the user's asked us to detach, we need to resume the hart */
@@ -961,67 +1098,67 @@ static const char *riscv_fpu_ext_string(const uint32_t extensions)
 }
 
 /*
- * Generate the fpu section of the description
- * fpu_size =32 single precision float
- * fpu_size =64 double precision float
- * The following are only generated for an F core (single precision HW float support):
- * <feature name="org.gnu.gdb.riscv.fpu">
- *			<reg name="ft0" bitsize="32"  regnum="33" />
- *			<reg name="ft1" bitsize="32"  regnum="34" />
- *			<reg name="ft2" bitsize="32"  regnum="35" />
- *			<reg name="ft3" bitsize="32"  regnum="36" />
- *			<reg name="ft4" bitsize="32"  regnum="37" />
- *			<reg name="ft5" bitsize="32"  regnum="38" />
- *			<reg name="ft6" bitsize="32"  regnum="39" />
- *			<reg name="ft7" bitsize="32"  regnum="40" />
- *			<reg name="fs0" bitsize="32"  regnum="41" />
- *			<reg name="fs1" bitsize="32"  regnum="42" />
- *			<reg name="fa0" bitsize="32"  regnum="43" />
- *			<reg name="fa1" bitsize="32"  regnum="44" />
- *			<reg name="fa2" bitsize="32"  regnum="45" />
- *			<reg name="fa3" bitsize="32"  regnum="46" />
- *			<reg name="fa4" bitsize="32"  regnum="47" />
- *			<reg name="fa5" bitsize="32"  regnum="48" />
- *			<reg name="fa6" bitsize="32"  regnum="49" />
- *			<reg name="fa7" bitsize="32"  regnum="50" />
- *			<reg name="fs2" bitsize="32"  regnum="51" />
- *			<reg name="fs3" bitsize="32"  regnum="52" />
- *			<reg name="fs4" bitsize="32"  regnum="53" />
- *			<reg name="fs5" bitsize="32"  regnum="54" />
- *			<reg name="fs6" bitsize="32"  regnum="55" />
- *			<reg name="fs7" bitsize="32"  regnum="56" />
- *			<reg name="fs8" bitsize="32"  regnum="57" />
- *			<reg name="fs9" bitsize="32"  regnum="58" />
- *			<reg name="fs10" bitsize="32"  regnum="59" />
- *			<reg name="fs11" bitsize="32"  regnum="60" />
- *			<reg name="ft8" bitsize="32"  regnum="61" />
- *			<reg name="ft9" bitsize="32"  regnum="62" />
- *			<reg name="ft10" bitsize="32"  regnum="63" />
- *			<reg name="ft11" bitsize="32"  regnum="64" />
- *			<reg name="fflags" bitsize="32" regnum="66"  save-restore="no"/>
- *			<reg name="frm" bitsize="32" regnum="67"  save-restore="no"/>
- *			<reg name="fcsr" bitsize="32" regnum="68"  save-restore="no"/>
- *</feature>
+ * Generate the FPU section of the description.
+ * fpu_size = 32 -> single precision float
+ * fpu_size = 64 -> double precision float
+ * The following XML-equivalent is only generated for an F core (single precision HW float support):
+ *  <feature name="org.gnu.gdb.riscv.fpu">
+ *      <reg name="ft0" bitsize="32" regnum="33" />
+ *      <reg name="ft1" bitsize="32" regnum="34" />
+ *      <reg name="ft2" bitsize="32" regnum="35" />
+ *      <reg name="ft3" bitsize="32" regnum="36" />
+ *      <reg name="ft4" bitsize="32" regnum="37" />
+ *      <reg name="ft5" bitsize="32" regnum="38" />
+ *      <reg name="ft6" bitsize="32" regnum="39" />
+ *      <reg name="ft7" bitsize="32" regnum="40" />
+ *      <reg name="fs0" bitsize="32" regnum="41" />
+ *      <reg name="fs1" bitsize="32" regnum="42" />
+ *      <reg name="fa0" bitsize="32" regnum="43" />
+ *      <reg name="fa1" bitsize="32" regnum="44" />
+ *      <reg name="fa2" bitsize="32" regnum="45" />
+ *      <reg name="fa3" bitsize="32" regnum="46" />
+ *      <reg name="fa4" bitsize="32" regnum="47" />
+ *      <reg name="fa5" bitsize="32" regnum="48" />
+ *      <reg name="fa6" bitsize="32" regnum="49" />
+ *      <reg name="fa7" bitsize="32" regnum="50" />
+ *      <reg name="fs2" bitsize="32" regnum="51" />
+ *      <reg name="fs3" bitsize="32" regnum="52" />
+ *      <reg name="fs4" bitsize="32" regnum="53" />
+ *      <reg name="fs5" bitsize="32" regnum="54" />
+ *      <reg name="fs6" bitsize="32" regnum="55" />
+ *      <reg name="fs7" bitsize="32" regnum="56" />
+ *      <reg name="fs8" bitsize="32" regnum="57" />
+ *      <reg name="fs9" bitsize="32" regnum="58" />
+ *      <reg name="fs10" bitsize="32" regnum="59" />
+ *      <reg name="fs11" bitsize="32" regnum="60" />
+ *      <reg name="ft8" bitsize="32" regnum="61" />
+ *      <reg name="ft9" bitsize="32" regnum="62" />
+ *      <reg name="ft10" bitsize="32" regnum="63" />
+ *      <reg name="ft11" bitsize="32" regnum="64" />
+ *      <reg name="fflags" bitsize="32" regnum="66" save-restore="no"/>
+ *      <reg name="frm" bitsize="32" regnum="67" save-restore="no"/>
+ *      <reg name="fcsr" bitsize="32" regnum="68" save-restore="no"/>
+ *  </feature>
  */
 static size_t riscv_build_target_fpu_description(char *const buffer, size_t max_length, size_t fpu_size)
 {
 	const size_t first_fpu_register = RV_FPU_GDB_OFFSET;             // see riscv_debug.h
 	const size_t first_fpu_control_register = RV_FPU_GDB_CSR_OFFSET; // see riscv_debug.h
-	size_t offset = 0;
+	size_t offset = 0U;
 	size_t print_size = max_length;
-	offset += snprintf(buffer + offset, print_size, "</feature><feature name=\"org.gnu.gdb.riscv.fpu\">");
+	offset += (size_t)snprintf(buffer + offset, print_size, "</feature><feature name=\"org.gnu.gdb.riscv.fpu\">");
 
-	for (size_t i = 0; i < ARRAY_LENGTH(riscv_fpu_regs); i++) {
-		if (max_length != 0)
-			print_size = max_length - (size_t)offset;
-		offset +=
-			snprintf(buffer + offset, print_size, "<reg name=\"f%s\" bitsize=\"%" PRIu32 "\"  regnum=\"%" PRIu32 "\"/>",
-				riscv_fpu_regs[i], (uint32_t)fpu_size, (uint32_t)(i + first_fpu_register));
+	for (size_t i = 0U; i < ARRAY_LENGTH(riscv_fpu_regs); ++i) {
+		if (max_length != 0U)
+			print_size = max_length - offset;
+		offset += (size_t)snprintf(buffer + offset, print_size,
+			"<reg name=\"f%s\" bitsize=\"%" PRIu32 "\"  regnum=\"%" PRIu32 "\"/>", riscv_fpu_regs[i],
+			(uint32_t)fpu_size, (uint32_t)(i + first_fpu_register));
 	}
-	for (size_t i = 0; i < ARRAY_LENGTH(riscv_fpu_ctrl_regs); i++) {
-		if (max_length != 0)
-			print_size = max_length - (size_t)offset;
-		offset += snprintf(buffer + offset, print_size,
+	for (size_t i = 0U; i < ARRAY_LENGTH(riscv_fpu_ctrl_regs); ++i) {
+		if (max_length != 0U)
+			print_size = max_length - offset;
+		offset += (size_t)snprintf(buffer + offset, print_size,
 			"<reg name=\"f%s\" bitsize=\"%" PRIu32 "\" regnum=\"%" PRIu32 "\" save-restore=\"no\"/>",
 			riscv_fpu_ctrl_regs[i], (uint32_t)fpu_size, (uint32_t)(i + first_fpu_control_register));
 	}
@@ -1034,48 +1171,48 @@ static size_t riscv_build_target_fpu_description(char *const buffer, size_t max_
  * unfortunately much less readable than the string literal it is equivalent to.
  *
  * This string it creates is the XML-equivalent to the following:
- * "<?xml version=\"1.0\"?>"
- * "<!DOCTYPE target SYSTEM \"gdb-target.dtd\">"
- * "<target>"
- * "	<architecture>riscv:rv[address_width][exts]</architecture>"
- * "	<feature name=\"org.gnu.gdb.riscv.cpu\">"
- * "		<reg name=\"zero\" bitsize=\"[address_width]\" regnum=\"0\"/>"
- * "		<reg name=\"ra\" bitsize=\"[address_width]\" type=\"code_ptr\"/>"
- * "		<reg name=\"sp\" bitsize=\"[address_width]\" type=\"data_ptr\"/>"
- * "		<reg name=\"gp\" bitsize=\"[address_width]\" type=\"data_ptr\"/>"
- * "		<reg name=\"tp\" bitsize=\"[address_width]\" type=\"data_ptr\"/>"
- * "		<reg name=\"t0\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t1\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t2\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"fp\" bitsize=\"[address_width]\" type=\"data_ptr\"/>"
- * "		<reg name=\"s1\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a0\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a1\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a2\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a3\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a4\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a5\" bitsize=\"[address_width]\"/>"
+ *  <?xml version=\"1.0\"?>
+ *  <!DOCTYPE target SYSTEM \"gdb-target.dtd\">
+ *  <target>
+ *      <architecture>riscv:rv[address_width][exts]</architecture>
+ *      <feature name="org.gnu.gdb.riscv.cpu">
+ *          <reg name="zero" bitsize="[address_width]" regnum="0"/>
+ *          <reg name="ra" bitsize="[address_width]" type="code_ptr"/>
+ *          <reg name="sp" bitsize="[address_width]" type="data_ptr"/>
+ *          <reg name="gp" bitsize="[address_width]" type="data_ptr"/>
+ *          <reg name="tp" bitsize="[address_width]" type="data_ptr"/>
+ *          <reg name="t0" bitsize="[address_width]"/>
+ *          <reg name="t1" bitsize="[address_width]"/>
+ *          <reg name="t2" bitsize="[address_width]"/>
+ *          <reg name="fp" bitsize="[address_width]" type="data_ptr"/>
+ *          <reg name="s1" bitsize="[address_width]"/>
+ *          <reg name="a0" bitsize="[address_width]"/>
+ *          <reg name="a1" bitsize="[address_width]"/>
+ *          <reg name="a2" bitsize="[address_width]"/>
+ *          <reg name="a3" bitsize="[address_width]"/>
+ *          <reg name="a4" bitsize="[address_width]"/>
+ *          <reg name="a5" bitsize="[address_width]"/>
  * The following are only generated for an I core, not an E:
- * "		<reg name=\"a6\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"a7\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s2\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s3\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s4\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s5\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s6\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s7\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s8\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s9\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s10\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"s11\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t3\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t4\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t5\" bitsize=\"[address_width]\"/>"
- * "		<reg name=\"t6\" bitsize=\"[address_width]\"/>"
+ *          <reg name="a6" bitsize="[address_width]"/>
+ *          <reg name="a7" bitsize="[address_width]"/>
+ *          <reg name="s2" bitsize="[address_width]"/>
+ *          <reg name="s3" bitsize="[address_width]"/>
+ *          <reg name="s4" bitsize="[address_width]"/>
+ *          <reg name="s5" bitsize="[address_width]"/>
+ *          <reg name="s6" bitsize="[address_width]"/>
+ *          <reg name="s7" bitsize="[address_width]"/>
+ *          <reg name="s8" bitsize="[address_width]"/>
+ *          <reg name="s9" bitsize="[address_width]"/>
+ *          <reg name="s10" bitsize="[address_width]"/>
+ *          <reg name="s11" bitsize="[address_width]"/>
+ *          <reg name="t3" bitsize="[address_width]"/>
+ *          <reg name="t4" bitsize="[address_width]"/>
+ *          <reg name="t5" bitsize="[address_width]"/>
+ *          <reg name="t6" bitsize="[address_width]"/>
  * Both are then continued with:
- * "		<reg name=\"pc\" bitsize=\"[address_width]\" type=\"code_ptr\"/>"
- * "	</feature>"
- * "</target>"
+ *          <reg name="pc" bitsize="[address_width]" type="code_ptr"/>
+ *      </feature>
+ *  </target>
  */
 static size_t riscv_build_target_description(
 	char *const buffer, size_t max_length, const uint8_t address_width, const uint32_t extensions)
@@ -1085,34 +1222,35 @@ static size_t riscv_build_target_description(
 
 	size_t print_size = max_length;
 	/* Start with the "preamble" chunks, which are mostly common across targets save for 2 words. */
-	int offset = snprintf(buffer, print_size, "%s target %sriscv:rv%u%c%s%s <feature name=\"org.gnu.gdb.riscv.cpu\">",
-		gdb_xml_preamble_first, gdb_xml_preamble_second, address_width, embedded ? 'e' : 'i', riscv_fpu_ext_string(fpu),
-		gdb_xml_preamble_third);
+	size_t offset =
+		(size_t)snprintf(buffer, print_size, "%s target %sriscv:rv%u%c%s%s <feature name=\"org.gnu.gdb.riscv.cpu\">",
+			gdb_xml_preamble_first, gdb_xml_preamble_second, address_width, embedded ? 'e' : 'i',
+			riscv_fpu_ext_string(fpu), gdb_xml_preamble_third);
 
 	const uint8_t gprs = embedded ? 16U : 32U;
 	/* Then build the general purpose register descriptions using the arrays at top of file */
 	/* Note that in a device using the embedded (E) extension, we only generate the first 16. */
 	for (uint8_t i = 0; i < gprs; ++i) {
 		if (max_length != 0)
-			print_size = max_length - (size_t)offset;
+			print_size = max_length - offset;
 
 		const char *const name = riscv_gpr_names[i];
 		const gdb_reg_type_e type = riscv_gpr_types[i];
 
-		offset += snprintf(buffer + offset, print_size, "<reg name=\"%s\" bitsize=\"%u\"%s%s/>", name, address_width,
-			gdb_reg_type_strings[type], i == 0 ? " regnum=\"0\"" : "");
+		offset += (size_t)snprintf(buffer + offset, print_size, "<reg name=\"%s\" bitsize=\"%u\"%s%s/>", name,
+			address_width, gdb_reg_type_strings[type], i == 0 ? " regnum=\"0\"" : "");
 	}
 
 	/* Then build the program counter register description, which has the same bitsize as the GPRs. */
 	if (max_length != 0)
-		print_size = max_length - (size_t)offset;
-	offset += snprintf(buffer + offset, print_size, "<reg name=\"pc\" bitsize=\"%u\"%s/>", address_width,
+		print_size = max_length - offset;
+	offset += (size_t)snprintf(buffer + offset, print_size, "<reg name=\"pc\" bitsize=\"%u\"%s/>", address_width,
 		gdb_reg_type_strings[GDB_TYPE_CODE_PTR]);
 
-	/* Basic single precision support */
+	/* If the target has basic single precision support, generate a block for that */
 	if (extensions & RV_ISA_EXT_SINGLE_FLOAT) {
 		if (max_length != 0)
-			print_size = max_length - (size_t)offset;
+			print_size = max_length - offset;
 		offset += riscv_build_target_fpu_description(buffer + offset, print_size, 32);
 	}
 
@@ -1120,22 +1258,22 @@ static size_t riscv_build_target_description(
 
 	/* Add main CSR registers*/
 	if (max_length != 0)
-		print_size = max_length - (size_t)offset;
-	offset += snprintf(buffer + offset, print_size, "</feature><feature name=\"org.gnu.gdb.riscv.csr\">");
+		print_size = max_length - offset;
+	offset += (size_t)snprintf(buffer + offset, print_size, "</feature><feature name=\"org.gnu.gdb.riscv.csr\">");
 	for (size_t i = 0; i < ARRAY_LENGTH(riscv_csrs); i++) {
 		if (max_length != 0)
-			print_size = max_length - (size_t)offset;
-		offset += snprintf(buffer + offset, print_size, " <reg name=\"%s\" bitsize=\"%u\" regnum=\"%" PRIu32 "\" %s/>",
-			riscv_csrs[i].name, address_width, riscv_csrs[i].csr_number + RV_CSR_GDB_OFFSET,
-			gdb_reg_save_restore_strings[GDB_SAVE_RESTORE_NO]);
+			print_size = max_length - offset;
+		offset += (size_t)snprintf(buffer + offset, print_size,
+			" <reg name=\"%s\" bitsize=\"%u\" regnum=\"%" PRIu32 "\" %s/>", riscv_csrs[i].name, address_width,
+			riscv_csrs[i].csr_number + RV_CSR_GDB_OFFSET, gdb_reg_save_restore_strings[GDB_SAVE_RESTORE_NO]);
 	}
 	/* Add the closing tags required */
 	if (max_length != 0)
-		print_size = max_length - (size_t)offset;
+		print_size = max_length - offset;
 
-	offset += snprintf(buffer + offset, print_size, "</feature></target>");
+	offset += (size_t)snprintf(buffer + offset, print_size, "</feature></target>");
 	/* offset is now the total length of the string created, discard the sign and return it. */
-	return (size_t)offset;
+	return offset;
 }
 
 static const char *riscv_target_description(target_s *const target)

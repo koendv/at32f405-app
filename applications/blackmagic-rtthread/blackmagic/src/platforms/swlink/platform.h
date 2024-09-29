@@ -28,6 +28,8 @@
 #include "timing.h"
 #include "timing_stm32.h"
 
+#define PLATFORM_HAS_TRACESWO
+
 #if ENABLE_DEBUG == 1
 #define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
@@ -52,13 +54,12 @@ extern bool debug_bmp;
 #define SWDIO_PIN  TMS_PIN
 #define SWCLK_PIN  TCK_PIN
 
+#define SWO_PORT GPIOB
+#define SWO_PIN  GPIO3
+
 /* Use PC14 for a "dummy" UART LED so we can observere at least with scope */
 #define LED_PORT_UART GPIOC
 #define LED_UART      GPIO14
-
-#define PLATFORM_HAS_TRACESWO 1
-#define NUM_TRACE_PACKETS     128U /* This is an 8K buffer */
-#define TRACESWO_PROTOCOL     2U   /* 1 = Manchester, 2 = NRZ / async */
 
 #define SWD_CR      GPIO_CRH(SWDIO_PORT)
 #define SWD_CR_MULT (1U << ((13U - 8U) << 2U))
@@ -100,6 +101,7 @@ extern bool debug_bmp;
 #define IRQ_PRI_USBUSART_DMA (2U << 4U)
 #define IRQ_PRI_USB_VBUS     (14U << 4U)
 #define IRQ_PRI_SWO_DMA      (0U << 4U)
+#define IRQ_PRI_SWO_TIM      (0U << 4U)
 
 #define USBUSART               USART1
 #define USBUSART_CR1           USART1_CR1
@@ -121,12 +123,21 @@ extern bool debug_bmp;
 #define USBUSART_DMA_RX_IRQ    NVIC_DMA1_CHANNEL5_IRQ
 #define USBUSART_DMA_RX_ISR(x) dma1_channel5_isr(x)
 
-#define TRACE_TIM          TIM2
-#define TRACE_TIM_CLK_EN() rcc_periph_clock_enable(RCC_TIM2)
-#define TRACE_IRQ          NVIC_TIM2_IRQ
-#define TRACE_ISR(x)       tim2_isr(x)
-#define TRACE_IC_IN        TIM_IC_IN_TI2
-#define TRACE_TRIG_IN      TIM_SMCR_TS_IT1FP2
+/* Use TIM2 Input 2 (from PB3/TDO with Remap) */
+#define SWO_TIM             TIM2
+#define SWO_TIM_CLK_EN()    rcc_periph_clock_enable(RCC_TIM2)
+#define SWO_TIM_IRQ         NVIC_TIM2_IRQ
+#define SWO_TIM_ISR(x)      tim2_isr(x)
+#define SWO_IC_IN           TIM_IC_IN_TI2
+#define SWO_IC_RISING       TIM_IC1
+#define SWO_CC_RISING       TIM2_CCR1
+#define SWO_ITR_RISING      TIM_DIER_CC1IE
+#define SWO_STATUS_RISING   TIM_SR_CC1IF
+#define SWO_IC_FALLING      TIM_IC2
+#define SWO_CC_FALLING      TIM2_CCR2
+#define SWO_STATUS_FALLING  TIM_SR_CC2IF
+#define SWO_STATUS_OVERFLOW (TIM_SR_CC1OF | TIM_SR_CC2OF)
+#define SWO_TRIG_IN         TIM_SMCR_TS_TI2FP2
 
 /*
  * On F103, only USART1 is on AHB2 and can reach 4.5MBaud at 72 MHz.

@@ -31,6 +31,10 @@
 #include <libopencm3/stm32/memorymap.h>
 #include <libopencm3/usb/usbd.h>
 
+#ifndef SWIM_AS_UART
+#define PLATFORM_HAS_TRACESWO
+#endif
+
 #if ENABLE_DEBUG == 1
 #define PLATFORM_HAS_DEBUG
 extern bool debug_bmp;
@@ -67,6 +71,9 @@ extern bool debug_bmp;
 #define NRST_PIN_CLONE GPIO6
 #endif
 
+#define SWO_PORT GPIOA
+#define SWO_PIN  GPIO6
+
 #ifdef BLUEPILL
 #define LED_PORT GPIOC
 #else
@@ -75,13 +82,6 @@ extern bool debug_bmp;
 /* Use PC14 for a "dummy" UART LED so we can observere at least with scope */
 #define LED_PORT_UART GPIOA
 #define LED_UART      GPIO9
-
-#ifndef SWIM_NRST_AS_UART
-#define PLATFORM_HAS_TRACESWO 1
-#endif
-
-#define NUM_TRACE_PACKETS 128U /* This is an 8K buffer */
-#define TRACESWO_PROTOCOL 2U   /* 1 = Manchester, 2 = NRZ / async */
 
 #define SWD_CR      GPIO_CRH(SWDIO_PORT)
 #define SWD_CR_MULT (1U << ((14U - 8U) << 2U))
@@ -134,6 +134,7 @@ extern bool debug_bmp;
 #define IRQ_PRI_USBUSART_DMA (2U << 4U)
 #define IRQ_PRI_USB_VBUS     (14U << 4U)
 #define IRQ_PRI_SWO_DMA      (0U << 4U)
+#define IRQ_PRI_SWO_TIM      (0U << 4U)
 
 #ifdef SWIM_NRST_AS_UART
 #define USBUSART               USART1
@@ -171,6 +172,22 @@ extern bool debug_bmp;
 
 #define USBUSART_DMA_BUS DMA1
 #define USBUSART_DMA_CLK RCC_DMA1
+
+/* Use TIM3 Input 1 (from PA6/TDO) */
+#define SWO_TIM             TIM3
+#define SWO_TIM_CLK_EN()    rcc_periph_clock_enable(RCC_TIM3)
+#define SWO_TIM_IRQ         NVIC_TIM3_IRQ
+#define SWO_TIM_ISR(x)      tim3_isr(x)
+#define SWO_IC_IN           TIM_IC_IN_TI1
+#define SWO_IC_RISING       TIM_IC1
+#define SWO_CC_RISING       TIM3_CCR1
+#define SWO_ITR_RISING      TIM_DIER_CC1IE
+#define SWO_STATUS_RISING   TIM_SR_CC1IF
+#define SWO_IC_FALLING      TIM_IC2
+#define SWO_CC_FALLING      TIM3_CCR2
+#define SWO_STATUS_FALLING  TIM_SR_CC2IF
+#define SWO_STATUS_OVERFLOW (TIM_SR_CC1OF | TIM_SR_CC2OF)
+#define SWO_TRIG_IN         TIM_SMCR_TS_TI1FP1
 
 /* On F103, only USART1 is on AHB2 and can reach 4.5MBaud at 72 MHz. */
 #define SWO_UART        USART1

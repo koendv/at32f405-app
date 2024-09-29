@@ -162,6 +162,8 @@
 #define MAX_FLASH                (16U * 1024U * 1024U)
 #define MAX_WRITE_CHUNK          0x1000U
 
+#define ID_RP2040 0x1002U
+
 typedef struct rp_priv {
 	uint16_t rom_reset_usb_boot;
 	uint32_t ssi_enabled;
@@ -190,8 +192,8 @@ static void rp_spi_restore(target_s *target);
 static bool rp_flash_prepare(target_s *target);
 static bool rp_flash_resume(target_s *target);
 static bool rp_flash_write(target_flash_s *flash, target_addr_t dest, const void *src, size_t length);
-static void rp_spi_read(target_s *target, uint16_t command, target_addr_t address, void *buffer, size_t length);
-static void rp_spi_run_command(target_s *target, uint16_t command, target_addr_t address);
+static void rp_spi_read(target_s *target, uint16_t command, target_addr32_t address, void *buffer, size_t length);
+static void rp_spi_run_command(target_s *target, uint16_t command, target_addr32_t address);
 static uint32_t rp_get_flash_length(target_s *target);
 
 static bool rp_flash_in_por_state(target_s *target);
@@ -220,8 +222,12 @@ static void rp_add_flash(target_s *target)
 	rp_flash_enter_xip(target);
 }
 
-bool rp_probe(target_s *target)
+bool rp2040_probe(target_s *const target)
 {
+	/* Check that the target has the right part number */
+	if (target->part_id != ID_RP2040)
+		return false;
+
 	/* Check bootrom magic*/
 	uint32_t boot_magic = target_mem32_read32(target, BOOTROM_MAGIC_ADDR);
 	if ((boot_magic & BOOTROM_MAGIC_MASK) != BOOTROM_MAGIC) {
@@ -242,7 +248,7 @@ bool rp_probe(target_s *target)
 	target->target_storage = (void *)priv_storage;
 
 	target->mass_erase = bmp_spi_mass_erase;
-	target->driver = "Raspberry RP2040";
+	target->driver = "RP2040";
 	target->target_options |= TOPT_INHIBIT_NRST;
 	target->attach = rp_attach;
 	target->enter_flash_mode = rp_flash_prepare;
@@ -367,7 +373,7 @@ static uint8_t rp_spi_xfer_data(target_s *const target, const uint8_t data)
 	return target_mem32_read32(target, RP_SSI_DR0) & 0xffU;
 }
 
-static void rp_spi_setup_xfer(target_s *const target, const uint16_t command, const target_addr_t address)
+static void rp_spi_setup_xfer(target_s *const target, const uint16_t command, const target_addr32_t address)
 {
 	/* Select the Flash */
 	rp_spi_chip_select(target, RP_GPIO_QSPI_CS_DRIVE_LOW);
@@ -389,13 +395,13 @@ static void rp_spi_setup_xfer(target_s *const target, const uint16_t command, co
 		rp_spi_xfer_data(target, 0);
 }
 
-static void rp_spi_read(target_s *const target, const uint16_t command, const target_addr_t address, void *const buffer,
-	const size_t length)
+static void rp_spi_read(target_s *const target, const uint16_t command, const target_addr32_t address,
+	void *const buffer, const size_t length)
 {
 	/* Setup the transaction */
 	rp_spi_setup_xfer(target, command, address);
 	/* Now read back the data that elicited */
-	uint8_t *const data = (uint8_t *const)buffer;
+	uint8_t *const data = (uint8_t *)buffer;
 	for (size_t i = 0; i < length; ++i)
 		/* Do a write to read */
 		data[i] = rp_spi_xfer_data(target, 0);
@@ -403,7 +409,7 @@ static void rp_spi_read(target_s *const target, const uint16_t command, const ta
 	rp_spi_chip_select(target, RP_GPIO_QSPI_CS_DRIVE_HIGH);
 }
 
-static void rp_spi_run_command(target_s *const target, const uint16_t command, const target_addr_t address)
+static void rp_spi_run_command(target_s *const target, const uint16_t command, const target_addr32_t address)
 {
 	/* Setup the transaction */
 	rp_spi_setup_xfer(target, command, address);
@@ -684,43 +690,43 @@ static bool rp_cmd_reset_usb_boot(target_s *t, int argc, const char **argv)
 	return true;
 }
 
-static bool rp_rescue_do_reset(target_s *t)
+static bool rp2040_rescue_do_reset(target_s *target)
 {
-	adiv5_access_port_s *ap = (adiv5_access_port_s *)t->priv;
-	uint32_t ctrlstat = ap->dp->low_access(ap->dp, ADIV5_LOW_READ, ADIV5_DP_CTRLSTAT, 0);
-	ap->dp->low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_DP_CTRLSTAT, ctrlstat | ADIV5_DP_CTRLSTAT_CDBGPWRUPREQ);
+	adiv5_access_port_s *ap = (adiv5_access_port_s *)target->priv;
+	const uint32_t ctrl = adiv5_dp_read(ap->dp, ADIV5_DP_CTRLSTAT);
+	adiv5_dp_write(ap->dp, ADIV5_DP_CTRLSTAT, ctrl | ADIV5_DP_CTRLSTAT_CDBGPWRUPREQ);
 	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, 100);
 	while (true) {
-		ctrlstat = ap->dp->low_access(ap->dp, ADIV5_LOW_READ, ADIV5_DP_CTRLSTAT, 0);
-		if (!(ctrlstat & ADIV5_DP_CTRLSTAT_CDBGRSTACK)) {
-			DEBUG_INFO("RP RESCUE succeeded.\n");
+		const uint32_t status = adiv5_dp_read(ap->dp, ADIV5_DP_CTRLSTAT);
+		if (!(status & ADIV5_DP_CTRLSTAT_CDBGRSTACK)) {
+			DEBUG_INFO("RP2040 Rescue success\n");
 			break;
 		}
 		if (platform_timeout_is_expired(&timeout)) {
-			DEBUG_INFO("RP RESCUE failed\n");
+			DEBUG_INFO("RP2040 Rescue failed\n");
 			break;
 		}
 	}
 	return false;
 }
 
-/* The RP Pico rescue DP provides no AP, so we need special handling
+/*
+ * The RP2040 rescue DP provides no AP, so we need special handling
  *
  * Attach to this DP will do the reset, but will fail to attach!
  */
-bool rp_rescue_probe(adiv5_access_port_s *ap)
+bool rp2040_rescue_probe(adiv5_access_port_s *ap)
 {
-	target_s *t = target_new();
-	if (!t) {
+	target_s *target = target_new();
+	if (!target)
 		return false;
-	}
 
 	adiv5_ap_ref(ap);
-	t->attach = (void *)rp_rescue_do_reset;
-	t->priv = ap;
-	t->priv_free = (void *)adiv5_ap_unref;
-	t->driver = "Raspberry RP2040 Rescue (Attach to reset!)";
+	target->attach = rp2040_rescue_do_reset;
+	target->priv = ap;
+	target->priv_free = (void (*)(void *))adiv5_ap_unref;
+	target->driver = "RP2040 Rescue (Attach to reset)";
 
 	return true;
 }

@@ -65,8 +65,12 @@ int main(void)
 	/* Assert blue LED as indicator we are in the bootloader */
 	rcc_periph_clock_enable(RCC_GPIOC);
 	gpio_mode_setup(LED_PORT, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, LED_BOOTLOADER | LED_IDLE_RUN);
+#ifdef ON_CARRIER_BOARD
+	gpio_set(LED_PORT, LED_IDLE_RUN);
+	gpio_clear(LED_PORT, LED_BOOTLOADER);
+#else
 	gpio_clear(LED_PORT, LED_BOOTLOADER | LED_IDLE_RUN);
-
+#endif
 	/* Run heartbeat on blue LED */
 	sys_tick_init();
 
@@ -90,7 +94,7 @@ void dfu_event(void)
 	/* Ask systick to pause blinking for 1 second */
 	dfu_activity_counter = 10U;
 	/* Toggle-blink it ourself */
-	SET_IDLE_STATE(idle_state);
+	SET_BOOTLOADER_STATE(idle_state);
 	idle_state = !idle_state;
 }
 
@@ -117,12 +121,12 @@ void sys_tick_handler(void)
 	case 0U:
 		/* Reload downcounter and disable LED */
 		count = 10U;
-		SET_IDLE_STATE(false);
+		SET_BOOTLOADER_STATE(false);
 		break;
 	case 1U:
 		count--;
 		/* Enable LED for 1/10th of cycle */
-		SET_IDLE_STATE(true);
+		SET_BOOTLOADER_STATE(true);
 		break;
 	default:
 		count--;

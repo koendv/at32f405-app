@@ -1,7 +1,7 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
  * Written by Rachel Mant <git@dragonmux.network>
  * All rights reserved.
  *
@@ -37,6 +37,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "target.h"
+#include "adiv5.h"
 
 typedef enum riscv_debug_version {
 	RISCV_DEBUG_UNKNOWN,
@@ -85,13 +86,15 @@ typedef enum riscv_match_size {
 } riscv_match_size_e;
 
 /* These defines specify Hart-specific information such as which memory access style to use */
-#define RV_HART_FLAG_MEMORY_ABSTRACT    0x00U
-#define RV_HART_FLAG_MEMORY_SYSBUS      0x10U
 #define RV_HART_FLAG_ACCESS_WIDTH_MASK  0x0fU
-#define RV_HART_FLAG_ACCESS_WIDTH_8BIT  0x01U
-#define RV_HART_FLAG_ACCESS_WIDTH_16BIT 0x02U
-#define RV_HART_FLAG_ACCESS_WIDTH_32BIT 0x04U
-#define RV_HART_FLAG_ACCESS_WIDTH_64BIT 0x08U
+#define RV_HART_FLAG_ACCESS_WIDTH_8BIT  (1U << 0U)
+#define RV_HART_FLAG_ACCESS_WIDTH_16BIT (1U << 1U)
+#define RV_HART_FLAG_ACCESS_WIDTH_32BIT (1U << 2U)
+#define RV_HART_FLAG_ACCESS_WIDTH_64BIT (1U << 3U)
+#define RV_HART_FLAG_MEMORY_MASK        (1U << 4U)
+#define RV_HART_FLAG_MEMORY_ABSTRACT    (0U << 4U)
+#define RV_HART_FLAG_MEMORY_SYSBUS      (1U << 4U)
+#define RV_HART_FLAG_DATA_GPR_ONLY      (1U << 5U) /* Hart supports Abstract Data commands for GPRs only */
 
 typedef struct riscv_dmi riscv_dmi_s;
 
@@ -113,6 +116,12 @@ struct riscv_dmi {
 	bool (*write)(riscv_dmi_s *dmi, uint32_t address, uint32_t value);
 };
 
+/* This structure represent a DMI bus that is accessed via an ADI AP */
+typedef struct riscv_dmi_ap {
+	riscv_dmi_s dmi;
+	adiv5_access_port_s *ap;
+} riscv_dmi_ap_s;
+
 /* This represents a specific Debug Module on the DMI bus */
 typedef struct riscv_dm {
 	uint32_t ref_count;
@@ -132,6 +141,7 @@ typedef struct riscv_hart {
 	uint8_t access_width;
 	uint8_t address_width;
 	uint8_t flags;
+	uint8_t progbuf_size;
 	riscv_hart_status_e status;
 
 	uint32_t extensions;
@@ -161,12 +171,13 @@ typedef struct riscv_hart {
 #define RV_DM_ABST_CMD_ACCESS_REG 0x00000000U
 #define RV_DM_ABST_CMD_ACCESS_MEM 0x02000000U
 
-#define RV_ABST_READ          0x00000000U
-#define RV_ABST_WRITE         0x00010000U
-#define RV_REG_XFER           0x00020000U
-#define RV_REG_ACCESS_32_BIT  0x00200000U
-#define RV_REG_ACCESS_64_BIT  0x00300000U
-#define RV_REG_ACCESS_128_BIT 0x00400000U
+#define RV_ABST_READ          (0U << 16U)
+#define RV_ABST_WRITE         (1U << 16U)
+#define RV_REG_XFER           (1U << 17U)
+#define RV_ABST_POSTEXEC      (1U << 18U)
+#define RV_REG_ACCESS_32_BIT  (2U << 20U)
+#define RV_REG_ACCESS_64_BIT  (3U << 20U)
+#define RV_REG_ACCESS_128_BIT (4U << 20U)
 
 #define RV_MEM_ACCESS_8_BIT   0x0U
 #define RV_MEM_ACCESS_16_BIT  0x1U
@@ -200,9 +211,10 @@ typedef struct riscv_hart {
 #define RV_TRIGGER_MODE_MASK          0xffff0000U
 #define RV_TRIGGER_SUPPORT_BREAKWATCH 0x00000004U
 
-// The CSR id when reported by GDB is shifted by RV_CSR_GDB_OFFSET
-// so they cannot collide with GPR registers, so you have to subtract
-// RV_CSR_GDB_OFFSET from the value received from gdb
+/*
+ * The CSR number when requested by GDB is shifted by RV_CSR_GDB_OFFSET so they cannot collide with
+ * the GPRs. As a result, we have to subtract RV_CSR_GDB_OFFSET from the value received from GDB.
+ */
 #define RV_CSR_GDB_OFFSET 128
 #define RV_CSR_STATUS     0x300
 #define RV_CSR_MISA       0x301
@@ -214,16 +226,28 @@ typedef struct riscv_hart {
 #define RV_CSR_MTVAL      0x343
 #define RV_CSR_MIP        0x344
 
-// These two lines are about allowing gdb to access
-// fpu registers through fake registers offset by
-// RV_FPU_GDB_OFFSET for normal fpu registers
-// and RV_FPU_GDB_CSR_OFFSET (for fpu related CSR)
+/*
+ * These two lines are about allowing GDB to access FPU registers through fake registers offset by
+ * RV_FPU_GDB_OFFSET for the normal FPU registers and RV_FPU_GDB_CSR_OFFSET for FPU related CSRs
+ */
 #define RV_FPU_GDB_OFFSET     33
 #define RV_FPU_GDB_CSR_OFFSET 66
 
+/* JTAG DTM function declarations */
+#ifdef ENABLE_RISCV
 void riscv_jtag_dtm_handler(uint8_t dev_index);
+void riscv_adi_dtm_handler(adiv5_access_port_s *ap);
+#endif
+bool riscv_jtag_dmi_read(riscv_dmi_s *dmi, uint32_t address, uint32_t *value);
+bool riscv_jtag_dmi_write(riscv_dmi_s *dmi, uint32_t address, uint32_t value);
+
 void riscv_dmi_init(riscv_dmi_s *dmi);
 riscv_hart_s *riscv_hart_struct(target_s *target);
+
+#if PC_HOSTED == 1
+/* BMDA interposition functions for DP setup */
+void bmda_riscv_jtag_dtm_init(riscv_dmi_s *dmi);
+#endif
 
 bool riscv_dm_read(riscv_dm_s *dbg_module, uint8_t address, uint32_t *value);
 bool riscv_dm_write(riscv_dm_s *dbg_module, uint8_t address, uint32_t value);
@@ -233,6 +257,9 @@ bool riscv_csr_write(riscv_hart_s *hart, uint16_t reg, const void *data);
 riscv_match_size_e riscv_breakwatch_match_size(size_t size);
 bool riscv_config_trigger(
 	riscv_hart_s *hart, uint32_t trigger, riscv_trigger_state_e mode, const void *config, const void *address);
+
+bool riscv_attach(target_s *target);
+void riscv_detach(target_s *target);
 
 uint8_t riscv_mem_access_width(const riscv_hart_s *hart, target_addr_t address, size_t length);
 void riscv32_unpack_data(void *dest, uint32_t data, uint8_t access_width);

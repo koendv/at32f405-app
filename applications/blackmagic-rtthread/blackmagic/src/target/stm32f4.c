@@ -27,9 +27,11 @@
  *
  * References:
  * RM0090 - STM32F405/415, STM32F407/417, STM32F427/437 and STM32F429/439 advanced Arm®-based 32-bit MCUs, Rev. 20
- * https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
- * RM0401 - STM32F410 advanced Arm®-based 32-bit MCUs
- * https://www.st.com/resource/en/reference_manual/rm0401-stm32f410-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ *   https://www.st.com/resource/en/reference_manual/rm0090-stm32f405415-stm32f407417-stm32f427437-and-stm32f429439-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * RM0401 - STM32F410 advanced Arm®-based 32-bit MCUs, Rev. 3
+ *   https://www.st.com/resource/en/reference_manual/rm0401-stm32f410-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * GD32F4xx Arm® Cortex®-M4 32-bit MCU User Manual, Rev. 3.0
+ *   https://www.gigadevice.com.cn/Public/Uploads/uploadfile/files/20240407/GD32F4xx_User_Manual_Rev3.0.pdf
  */
 
 #include "general.h"
@@ -37,23 +39,6 @@
 #include "target_internal.h"
 #include "cortexm.h"
 #include "stm32_common.h"
-
-static bool stm32f4_cmd_option(target_s *target, int argc, const char **argv);
-static bool stm32f4_cmd_psize(target_s *target, int argc, const char **argv);
-static bool stm32f4_cmd_uid(target_s *target, int argc, const char **argv);
-
-const command_s stm32f4_cmd_list[] = {
-	{"option", stm32f4_cmd_option, "Manipulate option bytes"},
-	{"psize", stm32f4_cmd_psize, "Configure flash write parallelism: (x8|x16|x32(default)|x64)"},
-	{"uid", stm32f4_cmd_uid, "Print unique device ID"},
-	{NULL, NULL, NULL},
-};
-
-static bool stm32f4_attach(target_s *target);
-static void stm32f4_detach(target_s *target);
-static bool stm32f4_flash_erase(target_flash_s *target_flash, target_addr_t addr, size_t len);
-static bool stm32f4_flash_write(target_flash_s *flash, target_addr_t dest, const void *src, size_t len);
-static bool stm32f4_mass_erase(target_s *target);
 
 /* Flash Program and Erase Controller Register Map */
 #define FPEC_BASE     0x40023c00U
@@ -120,17 +105,6 @@ static bool stm32f4_mass_erase(target_s *target);
 #define STM32F4_DBGMCU_APB1FREEZE_WWDG  (1U << 11U)
 #define STM32F4_DBGMCU_APB1FREEZE_IWDG  (1U << 12U)
 
-typedef struct stm32f4_flash {
-	target_flash_s flash;
-	uint8_t base_sector;
-	uint8_t bank_split;
-} stm32f4_flash_s;
-
-typedef struct stm32f4_priv {
-	uint32_t dbgmcu_cr;
-	align_e psize;
-} stm32f4_priv_s;
-
 #define ID_STM32F20X  0x411U
 #define ID_STM32F40X  0x413U
 #define ID_STM32F42X  0x419U
@@ -148,6 +122,35 @@ typedef struct stm32f4_priv {
 #define ID_GD32F450   0x2b3U
 #define ID_GD32F470   0xa2eU
 #define ID_GD32F405   0xfa4U
+
+typedef struct stm32f4_flash {
+	target_flash_s flash;
+	uint8_t base_sector;
+	uint8_t bank_split;
+} stm32f4_flash_s;
+
+typedef struct stm32f4_priv {
+	uint32_t dbgmcu_config;
+	align_e psize;
+} stm32f4_priv_s;
+
+static bool stm32f4_cmd_option(target_s *target, int argc, const char **argv);
+static bool stm32f4_cmd_psize(target_s *target, int argc, const char **argv);
+static bool stm32f4_cmd_uid(target_s *target, int argc, const char **argv);
+
+const command_s stm32f4_cmd_list[] = {
+	{"option", stm32f4_cmd_option, "Manipulate option bytes"},
+	{"psize", stm32f4_cmd_psize, "Configure flash write parallelism: (x8|x16|x32(default)|x64)"},
+	{"uid", stm32f4_cmd_uid, "Print unique device ID"},
+	{NULL, NULL, NULL},
+};
+
+static bool stm32f4_attach(target_s *target);
+static bool gd32f4_attach(target_s *target);
+static void stm32f4_detach(target_s *target);
+static bool stm32f4_flash_erase(target_flash_s *target_flash, target_addr_t addr, size_t len);
+static bool stm32f4_flash_write(target_flash_s *flash, target_addr_t dest, const void *src, size_t len);
+static bool stm32f4_mass_erase(target_s *target);
 
 static void stm32f4_add_flash(target_s *const target, const uint32_t addr, const size_t length, const size_t blocksize,
 	const uint8_t base_sector, const uint8_t split)
@@ -229,6 +232,36 @@ static uint16_t stm32f4_read_idcode(target_s *const target)
 	return idcode;
 }
 
+static bool stm32f4_configure_dbgmcu(target_s *const target)
+{
+	/* If we're in the probe phase */
+	if (target->target_storage == NULL) {
+		/* Allocate target-specific storage */
+		stm32f4_priv_s *const priv_storage = calloc(1, sizeof(*priv_storage));
+		if (!priv_storage) { /* calloc failed: heap exhaustion */
+			DEBUG_ERROR("calloc: failed in %s\n", __func__);
+			return false;
+		}
+		target->target_storage = priv_storage;
+		/* Get the current value of the debug control register (and store it for later) */
+		priv_storage->dbgmcu_config = target_mem32_read32(target, STM32F4_DBGMCU_CTRL);
+		/* Set up the Flash write/erase parallelism to 32-bit */
+		priv_storage->psize = ALIGN_32BIT;
+
+		target->detach = stm32f4_detach;
+	}
+
+	const stm32f4_priv_s *const priv = (stm32f4_priv_s *)target->target_storage;
+	/* Enable debugging during all low power modes */
+	target_mem32_write32(target, STM32F4_DBGMCU_CTRL,
+		priv->dbgmcu_config | STM32F4_DBGMCU_CTRL_DBG_SLEEP | STM32F4_DBGMCU_CTRL_DBG_STANDBY |
+			STM32F4_DBGMCU_CTRL_DBG_STOP);
+	/* And make sure the WDTs stay synchronised to the run state of the processor */
+	target_mem32_write32(
+		target, STM32F4_DBGMCU_APB1FREEZE, STM32F4_DBGMCU_APB1FREEZE_WWDG | STM32F4_DBGMCU_APB1FREEZE_IWDG);
+	return true;
+}
+
 bool stm32f4_probe(target_s *target)
 {
 	const uint16_t device_id = stm32f4_read_idcode(target);
@@ -252,21 +285,11 @@ bool stm32f4_probe(target_s *target)
 		return false;
 	}
 
-	/* Allocate target-specific storage */
-	stm32f4_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
-	if (!priv_storage) { /* calloc failed: heap exhaustion */
-		DEBUG_ERROR("calloc: failed in %s\n", __func__);
+	/* Now we have a stable debug environment, make sure the WDTs + WFI and WFE instructions can't cause problems */
+	if (!stm32f4_configure_dbgmcu(target))
 		return false;
-	}
-	target->target_storage = priv_storage;
-
-	/* Get the current value of the debug control register (and store it for later) */
-	priv_storage->dbgmcu_cr = target_mem32_read32(target, STM32F4_DBGMCU_CTRL);
-	/* Set up the Flash write/erase parallelism to 32-bit */
-	priv_storage->psize = ALIGN_32BIT;
 
 	target->attach = stm32f4_attach;
-	target->detach = stm32f4_detach;
 	target->mass_erase = stm32f4_mass_erase;
 	target->driver = stm32f4_get_chip_name(device_id);
 	target->part_id = device_id;
@@ -279,21 +302,11 @@ bool gd32f4_probe(target_s *target)
 	if (target->part_id != ID_GD32F450 && target->part_id != ID_GD32F470 && target->part_id != ID_GD32F405)
 		return false;
 
-	/* Allocate target-specific storage */
-	stm32f4_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
-	if (!priv_storage) { /* calloc failed: heap exhaustion */
-		DEBUG_ERROR("calloc: failed in %s\n", __func__);
+	/* Now we have a stable debug environment, make sure the WDTs + WFI and WFE instructions can't cause problems */
+	if (!stm32f4_configure_dbgmcu(target))
 		return false;
-	}
-	target->target_storage = priv_storage;
 
-	/* Get the current value of the debug control register (and store it for later) */
-	priv_storage->dbgmcu_cr = target_mem32_read32(target, STM32F4_DBGMCU_CTRL);
-	/* Set up the Flash write/erase parallelism to 32-bit */
-	priv_storage->psize = ALIGN_32BIT;
-
-	target->attach = cortexm_attach;
-	target->detach = cortexm_detach;
+	target->attach = gd32f4_attach;
 	target->mass_erase = stm32f4_mass_erase;
 	target->driver = stm32f4_get_chip_name(target->part_id);
 	target_add_commands(target, stm32f4_cmd_list, target->driver);
@@ -303,18 +316,18 @@ bool gd32f4_probe(target_s *target)
 
 	/* TODO implement DBS mode */
 	const uint8_t split = 12;
-	/* Bank 1*/
-	stm32f4_add_flash(target, 0x8000000, 0x10000, 0x4000, 0, split);  /* 4 16K */
-	stm32f4_add_flash(target, 0x8010000, 0x10000, 0x10000, 4, split); /* 1 64K */
-	stm32f4_add_flash(target, 0x8020000, 0xe0000, 0x20000, 5, split); /* 7 128K */
+	/* Bank 1 */
+	stm32f4_add_flash(target, 0x08000000, 0x10000, 0x4000, 0, split);  /* 4 16K */
+	stm32f4_add_flash(target, 0x08010000, 0x10000, 0x10000, 4, split); /* 1 64K */
+	stm32f4_add_flash(target, 0x08020000, 0xe0000, 0x20000, 5, split); /* 7 128K */
 
 	/* Bank 2 */
-	stm32f4_add_flash(target, 0x8100000, 0x10000, 0x4000, 16, split);  /* 4 16K */
-	stm32f4_add_flash(target, 0x8110000, 0x10000, 0x10000, 20, split); /* 1 64K */
-	stm32f4_add_flash(target, 0x8120000, 0xe0000, 0x20000, 21, split); /* 7 128K */
+	stm32f4_add_flash(target, 0x08100000, 0x10000, 0x4000, 16, split);  /* 4 16K */
+	stm32f4_add_flash(target, 0x08110000, 0x10000, 0x10000, 20, split); /* 1 64K */
+	stm32f4_add_flash(target, 0x08120000, 0xe0000, 0x20000, 21, split); /* 7 128K */
 
 	/* Third MB composed of 4 256 KB sectors, and uses sector values 12-15 */
-	stm32f4_add_flash(target, 0x8200000, 0x100000, 0x40000, 12, split);
+	stm32f4_add_flash(target, 0x08200000, 0x100000, 0x40000, 12, split);
 
 	return true;
 }
@@ -386,8 +399,11 @@ static bool stm32f4_attach(target_s *target)
 		return false;
 	}
 
-	/* Try to attach now we've determined it's a part we can work with */
-	if (!cortexm_attach(target))
+	/*
+	 * Try to attach now we've determined it's a part we can work with, and then ensure the
+	 * WDTs + WFI and WFE instructions can't cause problems (this is duplicated as it's undone by detach.)
+	 */
+	if (!cortexm_attach(target) || !stm32f4_configure_dbgmcu(target))
 		return false;
 
 	/* And then grab back all the part properties used to configure the memory map */
@@ -395,15 +411,6 @@ static bool stm32f4_attach(target_s *target)
 	const bool has_ccm_ram = stm32f4_device_has_ccm_ram(target->part_id);
 	const bool is_f7 = stm32f4_device_is_f7(target->part_id);
 	const bool large_sectors = stm32f4_device_has_large_sectors(target->part_id);
-
-	stm32f4_priv_s *const priv_storage = target->target_storage;
-	/* Enable debugging during all low power modes */
-	target_mem32_write32(target, STM32F4_DBGMCU_CTRL,
-		priv_storage->dbgmcu_cr | STM32F4_DBGMCU_CTRL_DBG_SLEEP | STM32F4_DBGMCU_CTRL_DBG_STANDBY |
-			STM32F4_DBGMCU_CTRL_DBG_STOP);
-	/* And make sure the WDTs stay synchronised to the run state of the processor */
-	target_mem32_write32(
-		target, STM32F4_DBGMCU_APB1FREEZE, STM32F4_DBGMCU_APB1FREEZE_WWDG | STM32F4_DBGMCU_APB1FREEZE_IWDG);
 
 	/* Free any previously built memory map */
 	target_mem_map_free(target);
@@ -488,10 +495,20 @@ static bool stm32f4_attach(target_s *target)
 	return true;
 }
 
+static bool gd32f4_attach(target_s *const target)
+{
+	/*
+	 * Try to attach to the part, and then ensure that the WDTs + WFI and WFE
+	 * instructions can't cause problems (this is duplicated as it's undone by detach.)
+	 */
+	return cortexm_attach(target) && stm32f4_configure_dbgmcu(target);
+}
+
 static void stm32f4_detach(target_s *target)
 {
+	const stm32f4_priv_s *const priv = (stm32f4_priv_s *)target->target_storage;
 	/* Reverse all changes to STM32F4_DBGMCU_CTRL */
-	target_mem32_write32(target, STM32F4_DBGMCU_CTRL, ((const stm32f4_priv_s *)target->target_storage)->dbgmcu_cr);
+	target_mem32_write32(target, STM32F4_DBGMCU_CTRL, priv->dbgmcu_config);
 	/* Now defer to the normal Cortex-M detach routine to complete the detach */
 	cortexm_detach(target);
 }

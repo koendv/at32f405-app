@@ -1,8 +1,14 @@
+commit c72087c2ce3dc654c88951adb168f5b88743c6fd
+Author: Koen De Vleeschauwer <kdv@kdvelectronics.eu>
+Date:   Sun Sep 29 11:09:35 2024 +0200
+
+    at32: add at32f402/at32f405
+
 diff --git a/src/target/at32f43x.c b/src/target/at32f43x.c
-index 53552f5b..95da505d 100644
+index 344bd4fc..4adfb3ea 100644
 --- a/src/target/at32f43x.c
 +++ b/src/target/at32f43x.c
-@@ -71,6 +71,8 @@ static bool at32f43_mass_erase(target_s *target);
+@@ -114,6 +114,8 @@ static bool at32f43_mass_erase(target_s *target);
  #define AT32F4x_IDCODE_PART_MASK   0x00000fffU
  #define AT32F43_SERIES_4K          0x70084000U
  #define AT32F43_SERIES_2K          0x70083000U
@@ -11,7 +17,7 @@ index 53552f5b..95da505d 100644
  
  typedef struct at32f43_flash {
  	target_flash_s target_flash;
-@@ -202,6 +204,52 @@ static bool at32f43_detect(target_s *target, const uint16_t part_id)
+@@ -289,6 +291,52 @@ static bool at32f43_detect(target_s *target, const uint16_t part_id)
  	return true;
  }
  
@@ -64,13 +70,12 @@ index 53552f5b..95da505d 100644
  /* Identify AT32F43x "High Performance" line devices (Cortex-M4) */
  bool at32f43x_probe(target_s *target)
  {
-@@ -216,6 +264,9 @@ bool at32f43x_probe(target_s *target)
+@@ -303,6 +351,8 @@ bool at32f43x_probe(target_s *target)
  
  	if (series == AT32F43_SERIES_4K || series == AT32F43_SERIES_2K)
  		return at32f43_detect(target, part_id);
 +	if (series == AT32F405_SERIES_256 || series == AT32F405_SERIES_128)
 +		return at32f405_detect(target, part_id);
-+
  	return false;
  }
  

@@ -20,7 +20,8 @@
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-/* This file implements capture of the TRACESWO output.
+/*
+ * This file implements capture of the Trace/SWO output using async signalling.
  *
  * ARM DDI 0403D - ARMv7M Architecture Reference Manual
  * ARM DDI 0337I - Cortex-M3 Technical Reference Manual
@@ -30,61 +31,75 @@
 #include "general.h"
 #include "platform.h"
 #include "usb.h"
+#include "swo.h"
 
 #include <libopencm3/cm3/nvic.h>
 #include <libopencm3/lm4f/rcc.h>
 #include <libopencm3/lm4f/nvic.h>
 #include <libopencm3/lm4f/uart.h>
-#include <libopencm3/usb/usbd.h>
 
-void traceswo_init(void)
+void swo_init(const swo_coding_e swo_mode, const uint32_t baudrate, const uint32_t itm_stream_bitmask)
 {
+	/* Neither mode switching nor ITM decoding is implemented on this platform (yet) */
+	(void)swo_mode;
+	(void)itm_stream_bitmask;
+
+	/* Ensure required peripherals are spun up */
+	/* TODO: Move this into platform_init()! */
 	periph_clock_enable(RCC_GPIOD);
-	periph_clock_enable(TRACEUART_CLK);
+	periph_clock_enable(SWO_UART_CLK);
 	__asm__("nop");
 	__asm__("nop");
 	__asm__("nop");
 
-	gpio_mode_setup(SWO_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, SWO_PIN);
-	gpio_set_af(SWO_PORT, 1, SWO_PIN); /* U2RX */
+	/* Reconfigure the GPIO over to UART mode */
+	gpio_mode_setup(SWO_UART_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, SWO_UART_RX_PIN);
+	gpio_set_af(SWO_UART_PORT, SWO_UART_PIN_AF, SWO_UART_RX_PIN);
 
-	uart_disable(TRACEUART);
+	/* Set up the UART for 8N1 at the requested baud rate */
+	uart_clock_from_sysclk(SWO_UART);
+	uart_set_baudrate(SWO_UART, baudrate);
+	uart_set_databits(SWO_UART, 8U);
+	uart_set_stopbits(SWO_UART, 1U);
+	uart_set_parity(SWO_UART, UART_PARITY_NONE);
 
-	/* Setup UART parameters. */
-	uart_clock_from_sysclk(TRACEUART);
-	uart_set_baudrate(TRACEUART, 800000);
-	uart_set_databits(TRACEUART, 8);
-	uart_set_stopbits(TRACEUART, 1);
-	uart_set_parity(TRACEUART, UART_PARITY_NONE);
+	/* Make use of the hardware FIFO for some additional buffering (up to 8 bytes) */
+	uart_enable_fifo(SWO_UART);
 
-	// Enable FIFO
-	uart_enable_fifo(TRACEUART);
+	/* Configure the FIFO interrupts for ½ full (RX) and ⅞ empty (TX) */
+	uart_set_fifo_trigger_levels(SWO_UART, UART_FIFO_RX_TRIG_1_2, UART_FIFO_TX_TRIG_7_8);
 
-	// Set FIFO interrupt trigger levels to 4/8 full for RX buffer and
-	// 7/8 empty (1/8 full) for TX buffer
-	uart_set_fifo_trigger_levels(TRACEUART, UART_FIFO_RX_TRIG_1_2, UART_FIFO_TX_TRIG_7_8);
+	/* Clear and enable the RX and RX timeout interrupts */
+	uart_clear_interrupt_flag(SWO_UART, UART_INT_RX | UART_INT_RT);
+	uart_enable_interrupts(SWO_UART, UART_INT_RX | UART_INT_RT);
 
-	uart_clear_interrupt_flag(TRACEUART, UART_INT_RX | UART_INT_RT);
-
-	/* Enable interrupts */
-	uart_enable_interrupts(TRACEUART, UART_INT_RX | UART_INT_RT);
-
-	/* Finally enable the USART. */
-	uart_enable(TRACEUART);
-
-	nvic_set_priority(TRACEUART_IRQ, 0);
-	nvic_enable_irq(TRACEUART_IRQ);
+	/* Actually enable the interrupts */
+	nvic_set_priority(SWO_UART_IRQ, IRQ_PRI_SWO_UART);
+	nvic_enable_irq(SWO_UART_IRQ);
 
 	/* Un-stall USB endpoint */
-	usbd_ep_stall_set(usbdev, 0x85, 0);
+	usbd_ep_stall_set(usbdev, USB_REQ_TYPE_IN | SWO_ENDPOINT, 0U);
 
+	/* Finally enable the USART. */
+	uart_enable(SWO_UART);
+
+	/* XXX: What is this even reconfiguring?! */
 	gpio_mode_setup(GPIOD, GPIO_MODE_OUTPUT, GPIO_PUPD_NONE, GPIO3);
 }
 
-void traceswo_baud(unsigned int baud)
+void swo_deinit(const bool deallocate)
 {
-	uart_set_baudrate(TRACEUART, baud);
-	uart_set_databits(TRACEUART, 8);
+	(void)deallocate;
+	/* Disable the UART */
+	uart_disable(SWO_UART);
+	/* Put the GPIO back into normal service as a GPIO */
+	gpio_mode_setup(SWO_UART_PORT, GPIO_MODE_INPUT, GPIO_PUPD_NONE, SWO_UART_RX_PIN);
+	gpio_set_af(SWO_UART_PORT, 0U, SWO_UART_RX_PIN);
+}
+
+uint32_t swo_uart_get_baudrate(void)
+{
+	return uart_get_baudrate(SWO_UART);
 }
 
 #define FIFO_SIZE 256U
@@ -111,13 +126,13 @@ void trace_buf_push(void)
 	if (len > 64U)
 		len = 64;
 
-	if (usbd_ep_write_packet(usbdev, 0x85, (uint8_t *)&buf_rx[buf_rx_out], len) == len) {
+	if (usbd_ep_write_packet(usbdev, USB_REQ_TYPE_IN | SWO_ENDPOINT, (uint8_t *)&buf_rx[buf_rx_out], len) == len) {
 		buf_rx_out += len;
 		buf_rx_out %= FIFO_SIZE;
 	}
 }
 
-void trace_buf_drain(usbd_device *dev, uint8_t ep)
+void swo_send_buffer(usbd_device *dev, uint8_t ep)
 {
 	(void)dev;
 	(void)ep;
@@ -129,12 +144,12 @@ void trace_tick(void)
 	trace_buf_push();
 }
 
-void TRACEUART_ISR(void)
+void SWO_UART_ISR(void)
 {
-	uint32_t flush = uart_is_interrupt_source(TRACEUART, UART_INT_RT);
+	uint32_t flush = uart_is_interrupt_source(SWO_UART, UART_INT_RT);
 
-	while (!uart_is_rx_fifo_empty(TRACEUART)) {
-		const uint32_t c = uart_recv(TRACEUART);
+	while (!uart_is_rx_fifo_empty(SWO_UART)) {
+		const uint32_t c = uart_recv(SWO_UART);
 
 		/* If the next increment of rx_in would put it at the same point
 		* as rx_out, the FIFO is considered full.

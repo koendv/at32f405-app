@@ -1,7 +1,8 @@
 # This file is part of the Black Magic Debug project.
 #
-# Copyright (C) 2023 1BitSquared <info@1bitsquared.com>
+# Copyright (C) 2023-2024 1BitSquared <info@1bitsquared.com>
 # Written by Rafael Silva <perigoso@riseup.net>
+# Modified by Rachel Mant <git@dragonmux.network>
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are met:
@@ -31,9 +32,11 @@
 target_common_includes = include_directories('.')
 
 target_common_sources = files(
+	'adi.c',
 	'adiv5.c',
 	'adiv5_jtag.c',
 	'adiv5_swd.c',
+	'adiv6.c',
 	'gdb_reg.c',
 	'jtag_devs.c',
 	'jtag_scan.c',
@@ -71,7 +74,8 @@ if is_firmware_build
 		'riscv32': 'RISC-V 32-bit support',
 		'riscv64': 'RISC-V 64-bit support',
 		'at32f4': 'Arterytek parts',
-		'ch579': 'CH579',
+		'apollo3': 'Ambiq Apollo3 parts',
+		'ch579': 'WinChipHead CH579',
 		'efm': 'Energy Micro parts',
 		'hc32': 'HC32 parts',
 		'lpc': 'LPC series parts',
@@ -79,7 +83,7 @@ if is_firmware_build
 		'nxp': 'Kinetis series parts',
 		'puya': 'Puya PY32 series parts',
 		'renesas': 'Renesas parts',
-		'rp': 'RP2040',
+		'rp': 'Raspberry Pi MCUs (RP2040, RP2350)',
 		'sam': 'ATSAM series parts',
 		'stm': 'STM32 (and clones) parts',
 		'ti': 'Texas Instruments parts',
@@ -130,12 +134,19 @@ target_cortexm = declare_dependency(
 	dependencies: target_cortex,
 )
 
+riscv_jtag_dtm = declare_dependency(
+	sources: files(
+		'riscv_jtag_dtm.c',
+	),
+)
+
 target_riscv = declare_dependency(
 	sources: files(
 		'riscv_debug.c',
-		'riscv_jtag_dtm.c',
+		'riscv_adi_dtm.c',
 	),
 	compile_args: ['-DENABLE_RISCV=1'],
+	dependencies: riscv_jtag_dtm,
 )
 
 target_riscv32 = declare_dependency(
@@ -146,6 +157,11 @@ target_riscv32 = declare_dependency(
 target_riscv64 = declare_dependency(
 	sources: files('riscv64.c'),
 	dependencies: target_riscv,
+)
+
+target_apollo3 = declare_dependency(
+	sources: files('apollo3.c'),
+	dependencies: target_cortexm,
 )
 
 target_ch579 = declare_dependency(
@@ -221,7 +237,10 @@ target_renesas = target_renesas_ra
 endif
 
 target_rp = declare_dependency(
-	sources: files('rp.c'),
+	sources: files(
+		'rp2040.c',
+		'rp2350.c',
+	),
 	dependencies: target_cortexm,
 )
 
@@ -252,6 +271,7 @@ target_stm = declare_dependency(
 		'stm32l0.c',
 		'stm32l4.c',
 		'stm32mp15.c',
+		'stm32wb0.c',
 		'stm32_common.c',
 	),
 	dependencies: target_stm_deps,
@@ -288,6 +308,14 @@ if is_firmware_build
 		enabled_target_deps += get_variable(f'target_@target@')
 	endforeach
 
+	# Check if we should enable the RISC-V Debug remote protocol acceleration and do so if required
+	if get_option('enable_riscv_accel')
+		enabled_target_deps += declare_dependency(
+			compile_args: ['-DENABLE_RISCV_ACCEL=1'],
+			dependencies: riscv_jtag_dtm,
+		)
+	endif
+
 	# BMD target dependency
 	bmd_targets = declare_dependency(
 		include_directories: target_common_includes,
@@ -303,6 +331,7 @@ libbmd_target_deps = [
 	target_riscv32,
 	target_riscv64,
 	# Enable all targets for libbmd
+	target_apollo3,
 	target_at32f4,
 	target_ch579,
 	target_efm,

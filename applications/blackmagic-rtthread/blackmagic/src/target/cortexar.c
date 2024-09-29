@@ -43,6 +43,7 @@
 
 #include "general.h"
 #include "exception.h"
+#include "adi.h"
 #include "adiv5.h"
 #include "target.h"
 #include "target_internal.h"
@@ -194,6 +195,9 @@ typedef struct cortexar_priv {
 #define CORTEXAR_CPSR_MODE_SYS  0x0000001fU
 #define CORTEXAR_CPSR_THUMB     (1U << 5U)
 
+/* CPSR remap position for GDB XML mapping */
+#define CORTEXAR_CPSR_GDB_REMAP_POS 25U
+
 /* Banked register offsets for when using using the DB{0,3} interface */
 enum {
 	CORTEXAR_BANKED_DTRTX,
@@ -313,6 +317,11 @@ static const uint16_t cortexar_spsr_encodings[5] = {
 /* Address Translate Stage 1 Current state PL1 Read */
 #define CORTEXAR_ATS1CPR 15U, ENCODE_CP_REG(7U, 8U, 0U, 0U)
 
+/* SCTLR System Control Register */
+#define CORTEXAR_SCTLR 15U, ENCODE_CP_REG(1U, 0U, 0U, 0U)
+
+#define CORTEXAR_SCTLR_MMU_ENABLED (1U << 0U)
+
 #define CORTEXAR_CPACR_CP10_FULL_ACCESS 0x00300000U
 #define CORTEXAR_CPACR_CP11_FULL_ACCESS 0x00c00000U
 
@@ -387,6 +396,7 @@ static void cortexar_reset(target_s *target);
 static target_halt_reason_e cortexar_halt_poll(target_s *target, target_addr_t *watch);
 static void cortexar_halt_request(target_s *target);
 static void cortexar_halt_resume(target_s *target, bool step);
+static bool cortexar_halt_and_wait(target_s *target);
 
 static int cortexar_breakwatch_set(target_s *target, breakwatch_s *breakwatch);
 static int cortexar_breakwatch_clear(target_s *target, breakwatch_s *breakwatch);
@@ -403,9 +413,9 @@ static void cortexar_banked_dcc_mode(target_s *const target)
 	if (!(priv->base.ap->dp->quirks & ADIV5_AP_ACCESS_BANKED)) {
 		priv->base.ap->dp->quirks |= ADIV5_AP_ACCESS_BANKED;
 		/* Configure the AP to put {DBGDTR{TX,RX},DBGITR,DBGDCSR} in banked data registers window */
-		adiv5_mem_access_setup(priv->base.ap, priv->base.base_addr + CORTEXAR_DBG_DTRTX, ALIGN_32BIT);
-		/* Selecting AP bank 1 to finish switching into banked mode */
-		adiv5_dp_write(priv->base.ap->dp, ADIV5_DP_SELECT, ((uint32_t)priv->base.ap->apsel << 24U) | 0x10U);
+		adi_ap_mem_access_setup(priv->base.ap, priv->base.base_addr + CORTEXAR_DBG_DTRTX, ALIGN_32BIT);
+		/* Now select AP bank 1 to finish switching into banked mode */
+		adi_ap_banked_access_setup(priv->base.ap);
 	}
 }
 
@@ -637,13 +647,25 @@ static void cortexar_coproc_write(target_s *const target, const uint8_t coproc, 
 
 /*
  * Perform a virtual to physical address translation.
- * NB: This requires the core to be halted! Trashes r0.
+ * NB: Halts target if needed to ensure operations succeed. Trashes r0.
  */
 static target_addr_t cortexar_virt_to_phys(target_s *const target, const target_addr_t virt_addr)
 {
 	/* Check if the target is PMSA and return early if it is */
 	if (!(target->target_options & TOPT_FLAVOUR_VIRT_MEM))
 		return virt_addr;
+
+	/* Halt if not already halted to ensure coproc read/write operations succeed */
+	const bool halted_in_function = cortexar_halt_and_wait(target);
+
+	/* Check if MMU is turned on; if not, return the virt_addr as-is. */
+	const uint32_t sctlr = cortexar_coproc_read(target, CORTEXAR_SCTLR);
+	if (!(sctlr & CORTEXAR_SCTLR_MMU_ENABLED)) {
+		/* Ensure we resume if we halted above, prior to returning. */
+		if (halted_in_function)
+			cortexar_halt_resume(target, false);
+		return virt_addr;
+	}
 
 	/*
 	 * Now we know the target is VMSA and so has the address translation machinery,
@@ -667,6 +689,10 @@ static target_addr_t cortexar_virt_to_phys(target_s *const target, const target_
 
 	/* Convert the physical address to a virtual one using the top 20 bits of PAR and the bottom 12 of the virtual. */
 	const target_addr_t address = (phys_addr & 0xfffff000U) | (virt_addr & 0x00000fffU);
+
+	if (halted_in_function)
+		cortexar_halt_resume(target, false);
+
 	return address;
 }
 
@@ -1071,9 +1097,14 @@ static void cortexar_mem_handle_fault(target_s *const target, const char *const 
  * This reads memory by jumping from the debug unit bus to the system bus.
  * NB: This requires the core to be halted! Uses instruction launches on
  * the core and requires we're in debug mode to work. Trashes r0.
+ * If core is not halted, temporarily halts target and resumes at the end
+ * of the function.
  */
 static void cortexar_mem_read(target_s *const target, void *const dest, const target_addr64_t src, const size_t len)
 {
+	/* If system is not halted, halt temporarily within this function. */
+	const bool halted_in_function = cortexar_halt_and_wait(target);
+
 	cortexar_priv_s *const priv = (cortexar_priv_s *)target->priv;
 	/* Cache DFSR and DFAR in case we wind up triggering a data fault */
 	if (!(priv->core_status & CORTEXAR_STATUS_FAULT_CACHE_VALID)) {
@@ -1107,6 +1138,9 @@ static void cortexar_mem_read(target_s *const target, void *const dest, const ta
 	if (len > 16U)
 		DEBUG_PROTO(" ...");
 	DEBUG_PROTO("\n");
+
+	if (halted_in_function)
+		cortexar_halt_resume(target, false);
 }
 
 /* Fast path for cortexar_mem_write(). Assumes the address to read data from is already loaded in r0. */
@@ -1257,7 +1291,7 @@ static void *cortexar_reg_ptr(target_s *const target, const size_t reg)
 	if (reg < 16U)
 		return &priv->core_regs.r[reg];
 	/* cpsr */
-	if (reg == 16U)
+	if (reg == CORTEXAR_CPSR_GDB_REMAP_POS)
 		return &priv->core_regs.cpsr;
 	/* Check if the core has a FPU first */
 	if (!(target->target_options & TOPT_FLAVOUR_FLOAT))
@@ -1274,7 +1308,7 @@ static void *cortexar_reg_ptr(target_s *const target, const size_t reg)
 static size_t cortexar_reg_width(const size_t reg)
 {
 	/* r0-r15, cpsr, fpcsr */
-	if (reg < CORTEXAR_GENERAL_REG_COUNT || reg == 33U)
+	if (reg < CORTEXAR_GENERAL_REG_COUNT || reg == CORTEXAR_CPSR_GDB_REMAP_POS || reg == 33U)
 		return 4U;
 	/* d0-d15 */
 	return 8U;
@@ -1427,12 +1461,14 @@ static target_halt_reason_e cortexar_halt_poll(target_s *const target, target_ad
 
 static void cortexar_halt_resume(target_s *const target, const bool step)
 {
+	uint32_t dscr = cortex_dbg_read32(target, CORTEXAR_DBG_DSCR);
+	if (!(dscr & CORTEXAR_DBG_DSCR_HALTED))
+		return;
+
 	cortexar_priv_s *const priv = (cortexar_priv_s *)target->priv;
-	priv->base.ap->dp->quirks &= ~ADIV5_AP_ACCESS_BANKED;
 	/* Restore the core's registers so the running program doesn't know we've been in there */
 	cortexar_regs_restore(target);
 
-	uint32_t dscr = cortex_dbg_read32(target, CORTEXAR_DBG_DSCR);
 	/*
 	 * If we're setting up to single-step the core, configure the final breakpoint slot appropriately.
 	 * We always keep the final supported breakpoint reserved for this purpose so
@@ -1465,6 +1501,36 @@ static void cortexar_halt_resume(target_s *const target, const bool step)
 	uint32_t status = CORTEXAR_DBG_DSCR_HALTED;
 	while (!(status & CORTEXAR_DBG_DSCR_RESTARTED) && !platform_timeout_is_expired(&timeout))
 		status = cortex_dbg_read32(target, CORTEXAR_DBG_DSCR);
+}
+
+/*
+ * Halt the core and await halted status. This function should only return true when 
+ * it is, itself, responsible for having halted the target. This allows storing of the
+ * returned value to later determine whether the target should be resumed.
+ */
+static bool cortexar_halt_and_wait(target_s *const target)
+{
+	/*
+	 * Check the target is already halted; return false as this function was not
+	 * responsible for halting the target.
+	 */
+	if (cortex_dbg_read32(target, CORTEXAR_DBG_DSCR) & CORTEXAR_DBG_DSCR_HALTED)
+		return false;
+
+	platform_timeout_s timeout;
+	cortexar_halt_request(target);
+	platform_timeout_set(&timeout, 250);
+	target_halt_reason_e reason = TARGET_HALT_RUNNING;
+	while (!platform_timeout_is_expired(&timeout) && reason == TARGET_HALT_RUNNING)
+		reason = target_halt_poll(target, NULL);
+	if (reason != TARGET_HALT_REQUEST) {
+		DEBUG_ERROR("Failed to halt the core\n");
+		/* This function tried to halt the target but ultimately was not successful. */
+		return false;
+	}
+
+	/* Return true as this function successfully halted the target. */
+	return true;
 }
 
 void cortexar_invalidate_all_caches(target_s *const target)
@@ -1758,6 +1824,11 @@ static size_t cortexar_build_target_description(char *const buffer, size_t max_l
 		const char *const name = cortexr_spr_names[i];
 		const gdb_reg_type_e type = cortexr_spr_types[i];
 
+		/*
+		 * Create tag for each register In the case of CPSR, remap it to 25 so it aligns
+		 * with the target description XML string above. CORTEXAR_CPSR_GDB_REMAP_POS is
+		 * used for this mapping elsewhere in the logic.
+		 */
 		offset += snprintf(buffer + offset, print_size, "<reg name=\"%s\" bitsize=\"32\"%s%s/>", name,
 			gdb_reg_type_strings[type], i == 3U ? " regnum=\"25\"" : "");
 	}

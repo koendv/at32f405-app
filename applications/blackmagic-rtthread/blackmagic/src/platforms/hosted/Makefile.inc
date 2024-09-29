@@ -123,6 +123,17 @@ ifneq ($(HOSTED_BMP_ONLY), 1)
     LDFLAGS += $(shell pkg-config --libs $(HIDAPILIB))
 endif
 
+ifeq ($(ENABLE_GPIOD), 1)
+    SRC += bmda_gpiod.c
+    SRC += platforms/common/jtagtap.c platforms/common/swdptap.c
+    ifneq ($(shell pkg-config --exists libgpiod; echo $$?), 0)
+        $(error Please install libgpiod dependency or drop ENABLE_GPIOD=1)
+    endif
+    CFLAGS += $(shell pkg-config --cflags libgpiod)
+    LDFLAGS += $(shell pkg-config --libs libgpiod)
+    CFLAGS += -DENABLE_GPIOD=1
+endif
+
 VPATH += platforms/hosted/remote
 
 SRC += platform.c
@@ -130,7 +141,7 @@ SRC += timing.c cli.c utils.c probe_info.c debug.c
 SRC += protocol_v0.c protocol_v0_swd.c protocol_v0_jtag.c protocol_v0_adiv5.c
 SRC += protocol_v1.c protocol_v1_adiv5.c protocol_v2.c
 SRC += protocol_v3.c protocol_v3_adiv5.c
-SRC += protocol_v4.c protocol_v4_adiv5.c
+SRC += protocol_v4.c protocol_v4_adiv5.c protocol_v4_adiv6.c protocol_v4_riscv.c
 SRC += bmp_remote.c
 ifneq ($(HOSTED_BMP_ONLY), 1)
     ifeq ($(OS), Windows_NT)

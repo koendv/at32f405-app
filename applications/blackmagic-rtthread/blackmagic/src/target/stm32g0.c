@@ -29,20 +29,16 @@
  * the device, providing the XML memory map and Flash memory programming.
  *
  * References:
- * RM0454 - Rev 5 (Value line)
- *   Reference manual - STM32G0x0 advanced ARM(R)-based 32-bit MCUs
- *                      (STM32G030/STM32G050/STM32G070/STM32G0B0)
- * RM0444 - Rev 5 (Access line)
- *   Reference manual - STM32G0x1 advanced ARM(R)-based 32-bit MCUs
- *                      (STM32G031/STM32G041/STM32G051/STM32G061/
- *                       STM32G071/STM32G081/STM32G0B1/STM32G0C1)
- * RM0490 - Rev 3
- *   Reference manual - STM32C0x1 advanced ARM(R)-based 32-bit MCUs
- *                      (STM32C011/STM32C031)
- * STM32C0 shares the same technological platform as STM32G0.
- * PM0223 - Rev 6
- *   Programming manual - Cortex(R)-M0+ programming manual for STM32L0, STM32G0,
- *                        STM32C0, STM32WL and STM32WB Series
+ * RM0454 - STM32G0x0 advanced Arm®-based 32-bit MCUs, Rev. 5
+ *   https://www.st.com/resource/en/reference_manual/rm0454-stm32g0x0-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * RM0444 - STM32G0x1 advanced Arm®-based 32-bit MCUs, Rev. 5
+ *   https://www.st.com/resource/en/reference_manual/rm0444-stm32g0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * RM0490 - STM32C0x1 advanced Arm®-based 32-bit MCUs, Rev. 3
+ *   https://www.st.com/resource/en/reference_manual/rm0490-stm32c0x1-advanced-armbased-32bit-mcus-stmicroelectronics.pdf
+ * PM0223 - STM32 Cortex®-M0+ MCUs programming manual, Rev 6
+ *   https://www.st.com/resource/en/programming_manual/pm0223-stm32-cortexm0-mcus-programming-manual-stmicroelectronics.pdf
+ *
+ * Note: The STM32C0 series shares the same technological platform as the STM32G0 series.
  */
 
 #include "general.h"
@@ -52,7 +48,6 @@
 #include "command.h"
 #include "stm32_common.h"
 
-/* Flash */
 #define FLASH_START            0x08000000U
 #define FLASH_MEMORY_SIZE      0x1fff75e0U
 #define FLASH_PAGE_SIZE        0x800U
@@ -127,7 +122,6 @@
 #define FLASH_PCROP2BER     (G0_FLASH_BASE + 0x058U)
 #define FLASH_SECR          (G0_FLASH_BASE + 0x080U)
 
-/* RAM */
 #define RAM_START      0x20000000U
 #define RAM_SIZE_G03_4 (8U * 1024U)   // 8kiB
 #define RAM_SIZE_G05_6 (18U * 1024U)  // 18kiB
@@ -137,20 +131,19 @@
 #define RAM_SIZE_C01 (6U * 1024U)  // 6kiB
 #define RAM_SIZE_C03 (12U * 1024U) // 12kiB
 
-/* RCC */
 #define G0_RCC_BASE       0x40021000U
 #define RCC_APBENR1       (G0_RCC_BASE + 0x3cU)
 #define RCC_APBENR1_DBGEN (1U << 27U)
 
-/* DBG */
-#define DBG_BASE                  0x40015800U
-#define DBG_IDCODE                (DBG_BASE + 0x00U)
-#define DBG_CR                    (DBG_BASE + 0x04U)
-#define DBG_CR_DBG_STANDBY        (1U << 2U)
-#define DBG_CR_DBG_STOP           (1U << 1U)
-#define DBG_APB_FZ1               (DBG_BASE + 0x08U)
-#define DBG_APB_FZ1_DBG_IWDG_STOP (1U << 12U)
-#define DBG_APB_FZ1_DBG_WWDG_STOP (1U << 11U)
+#define STM32G0_DBGMCU_BASE       0x40015800U
+#define STM32G0_DBGMCU_IDCODE     (STM32G0_DBGMCU_BASE + 0x000U)
+#define STM32G0_DBGMCU_CONFIG     (STM32G0_DBGMCU_BASE + 0x004U)
+#define STM32G0_DBGMCU_APBFREEZE1 (STM32G0_DBGMCU_BASE + 0x008U)
+
+#define STM32G0_DBGMCU_CONFIG_STOP     (1U << 1U)
+#define STM32G0_DBGMCU_CONFIG_STANDBY  (1U << 2U)
+#define STM32G0_DBGMCU_APBFREEZE1_WWDG (1U << 11U)
+#define STM32G0_DBGMCU_APBFREEZE1_IWDG (1U << 12U)
 
 #define STM32C0_UID_BASE 0x1fff7550U
 #define STM32G0_UID_BASE 0x1fff7590U
@@ -159,60 +152,86 @@
  * The underscores in these definitions represent /'s, this means
  * that STM32G03_4 is supposed to refer to the G03/4 aka the G03 and G04.
  */
-#define STM32C011  0x443U
-#define STM32C031  0x453U
-#define STM32G03_4 0x466U
-#define STM32G05_6 0x456U
-#define STM32G07_8 0x460U
-#define STM32G0B_C 0x467U
-
-typedef struct stm32g0_saved_regs {
-	uint32_t rcc_apbenr1;
-	uint32_t dbg_cr;
-	uint32_t dbg_apb_fz1;
-} stm32g0_saved_regs_s;
+#define ID_STM32C011  0x443U
+#define ID_STM32C031  0x453U
+#define ID_STM32G03_4 0x466U
+#define ID_STM32G05_6 0x456U
+#define ID_STM32G07_8 0x460U
+#define ID_STM32G0B_C 0x467U
 
 typedef struct stm32g0_priv {
-	stm32g0_saved_regs_s saved_regs;
+	uint32_t dbgmcu_config;
 	bool irreversible_enabled;
 } stm32g0_priv_s;
 
-static bool stm32g0_attach(target_s *t);
-static void stm32g0_detach(target_s *t);
-static bool stm32g0_flash_erase(target_flash_s *f, target_addr_t addr, size_t len);
-static bool stm32g0_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len);
-static bool stm32g0_mass_erase(target_s *t);
+static bool stm32g0_attach(target_s *target);
+static void stm32g0_detach(target_s *target);
+static bool stm32g0_flash_erase(target_flash_s *flash, target_addr_t addr, size_t len);
+static bool stm32g0_flash_write(target_flash_s *flash, target_addr_t dest, const void *src, size_t len);
+static bool stm32g0_mass_erase(target_s *target);
 
 /* Custom commands */
-static bool stm32g0_cmd_erase_bank(target_s *t, int argc, const char **argv);
-static bool stm32g0_cmd_option(target_s *t, int argc, const char **argv);
-static bool stm32g0_cmd_irreversible(target_s *t, int argc, const char **argv);
-static bool stm32g0_cmd_uid(target_s *t, int argc, const char **argv);
+static bool stm32g0_cmd_erase_bank(target_s *target, int argc, const char **argv);
+static bool stm32g0_cmd_option(target_s *target, int argc, const char **argv);
+static bool stm32g0_cmd_irreversible(target_s *target, int argc, const char **argv);
+static bool stm32g0_cmd_uid(target_s *target, int argc, const char **argv);
 
 const command_s stm32g0_cmd_list[] = {
-	{"erase_bank 1|2", stm32g0_cmd_erase_bank, "Erase specified Flash bank"},
+	{"erase_bank", stm32g0_cmd_erase_bank, "Erase specified Flash bank"},
 	{"option", stm32g0_cmd_option, "Manipulate option bytes"},
 	{"irreversible", stm32g0_cmd_irreversible, "Allow irreversible operations: (enable|disable)"},
 	{"uid", stm32g0_cmd_uid, "Print unique device ID"},
 	{NULL, NULL, NULL},
 };
 
-static void stm32g0_add_flash(target_s *t, uint32_t addr, size_t length, size_t blocksize)
+static void stm32g0_add_flash(target_s *target, uint32_t addr, size_t length, size_t blocksize)
 {
-	target_flash_s *f = calloc(1, sizeof(*f));
-	if (!f) { /* calloc failed: heap exhaustion */
+	target_flash_s *flash = calloc(1, sizeof(*flash));
+	if (!flash) { /* calloc failed: heap exhaustion */
 		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return;
 	}
 
-	f->start = addr;
-	f->length = length;
-	f->blocksize = blocksize;
-	f->erase = stm32g0_flash_erase;
-	f->write = stm32g0_flash_write;
-	f->writesize = blocksize;
-	f->erased = 0xffU;
-	target_add_flash(t, f);
+	flash->start = addr;
+	flash->length = length;
+	flash->blocksize = blocksize;
+	flash->erase = stm32g0_flash_erase;
+	flash->write = stm32g0_flash_write;
+	flash->writesize = blocksize;
+	flash->erased = 0xffU;
+	target_add_flash(target, flash);
+}
+
+static bool stm32g0_configure_dbgmcu(target_s *const target)
+{
+	/* If we're in the probe phase */
+	if (target->target_storage == NULL) {
+		/* Allocate target-specific storage */
+		stm32g0_priv_s *const priv_storage = calloc(1, sizeof(*priv_storage));
+		if (!priv_storage) { /* calloc failed: heap exhaustion */
+			DEBUG_ERROR("calloc: failed in %s\n", __func__);
+			return false;
+		}
+		target->target_storage = priv_storage;
+		/* Get the current value of the debug control register (and store it for later) */
+		priv_storage->dbgmcu_config = target_mem32_read32(target, STM32G0_DBGMCU_CONFIG);
+		/* Mark irriversible operations disabled */
+		priv_storage->irreversible_enabled = false;
+
+		target->attach = stm32g0_attach;
+		target->detach = stm32g0_detach;
+	}
+
+	const stm32g0_priv_s *const priv = (stm32g0_priv_s *)target->target_storage;
+	/* Enable the clock for the DBGMCU if it's not already */
+	target_mem32_write32(target, RCC_APBENR1, target_mem32_read32(target, RCC_APBENR1) | RCC_APBENR1_DBGEN);
+	/* Enable debugging during all low power modes */
+	target_mem32_write32(target, STM32G0_DBGMCU_CONFIG,
+		priv->dbgmcu_config | (STM32G0_DBGMCU_CONFIG_STANDBY | STM32G0_DBGMCU_CONFIG_STOP));
+	/* And make sure the WDTs stay synchronised to the run state of the processor */
+	target_mem32_write32(
+		target, STM32G0_DBGMCU_APBFREEZE1, STM32G0_DBGMCU_APBFREEZE1_IWDG | STM32G0_DBGMCU_APBFREEZE1_WWDG);
+	return true;
 }
 
 /*
@@ -221,148 +240,116 @@ static void stm32g0_add_flash(target_s *t, uint32_t addr, size_t length, size_t 
  * Single bank devices are populated with their maximal flash capacity to allow
  * users to program devices with more flash than announced.
  */
-bool stm32g0_probe(target_s *t)
+bool stm32g0_probe(target_s *target)
 {
 	uint32_t ram_size = 0U;
 	size_t flash_size = 0U;
 
-	switch (t->part_id) {
-	case STM32G03_4:;
-		const uint16_t dev_id = target_mem32_read32(t, DBG_IDCODE) & 0xfffU;
+	switch (target->part_id) {
+	case ID_STM32G03_4:;
+		const uint16_t dev_id = target_mem32_read32(target, STM32G0_DBGMCU_IDCODE) & 0xfffU;
 		switch (dev_id) {
-		case STM32G03_4:
+		case ID_STM32G03_4:
 			/* SRAM 8kiB, Flash up to 64kiB */
 			ram_size = RAM_SIZE_G03_4;
 			flash_size = FLASH_SIZE_MAX_G03_4;
-			t->driver = "STM32G03/4";
+			target->driver = "STM32G03/4";
 			break;
-		case STM32C011:
+		case ID_STM32C011:
 			/* SRAM 6kiB, Flash up to 32kiB */
 			ram_size = RAM_SIZE_C01;
 			flash_size = FLASH_SIZE_MAX_C01;
-			t->driver = "STM32C011";
+			target->driver = "STM32C011";
 			break;
-		case STM32C031:
+		case ID_STM32C031:
 			/* SRAM 12kiB, Flash up to 32kiB */
 			ram_size = RAM_SIZE_C03;
 			flash_size = FLASH_SIZE_MAX_C03;
-			t->driver = "STM32C031";
+			target->driver = "STM32C031";
 			break;
 		default:
 			return false;
 		}
-		t->part_id = dev_id;
+		target->part_id = dev_id;
 		break;
-	case STM32G05_6:
+	case ID_STM32G05_6:
 		/* SRAM 18kiB, Flash up to 64kiB */
 		ram_size = RAM_SIZE_G05_6;
 		flash_size = FLASH_SIZE_MAX_G05_6;
-		t->driver = "STM32G05/6";
+		target->driver = "STM32G05/6";
 		break;
-	case STM32G07_8:
+	case ID_STM32G07_8:
 		/* SRAM 36kiB, Flash up to 128kiB */
 		ram_size = RAM_SIZE_G07_8;
 		flash_size = FLASH_SIZE_MAX_G07_8;
-		t->driver = "STM32G07/8";
+		target->driver = "STM32G07/8";
 		break;
-	case STM32G0B_C:
+	case ID_STM32G0B_C:
 		/* SRAM 144kiB, Flash up to 512kiB */
 		ram_size = RAM_SIZE_G0B_C;
-		flash_size = target_mem32_read16(t, FLASH_MEMORY_SIZE) * 1024U;
-		t->driver = "STM32G0B/C";
+		flash_size = target_mem32_read16(target, FLASH_MEMORY_SIZE) * 1024U;
+		target->driver = "STM32G0B/C";
 		break;
 	default:
 		return false;
 	}
 
-	target_add_ram32(t, RAM_START, ram_size);
-	/* Even dual Flash bank devices have a contiguous Flash memory space */
-	stm32g0_add_flash(t, FLASH_START, flash_size, FLASH_PAGE_SIZE);
-
-	t->attach = stm32g0_attach;
-	t->detach = stm32g0_detach;
-	t->mass_erase = stm32g0_mass_erase;
-	target_add_commands(t, stm32g0_cmd_list, t->driver);
-
-	/* Save private storage */
-	stm32g0_priv_s *priv_storage = calloc(1, sizeof(*priv_storage));
-	if (!priv_storage) { /* calloc failed: heap exhaustion */
-		DEBUG_ERROR("calloc: failed in %s\n", __func__);
+	/* Now we have a stable debug environment, make sure the WDTs + WFI and WFE instructions can't cause problems */
+	if (!stm32g0_configure_dbgmcu(target))
 		return false;
-	}
-	t->target_storage = priv_storage;
-	priv_storage->irreversible_enabled = false;
+
+	target_add_ram32(target, RAM_START, ram_size);
+	/* Even dual Flash bank devices have a contiguous Flash memory space */
+	stm32g0_add_flash(target, FLASH_START, flash_size, FLASH_PAGE_SIZE);
+
+	target->mass_erase = stm32g0_mass_erase;
+	target_add_commands(target, stm32g0_cmd_list, target->driver);
 
 	/* OTP Flash area */
-	stm32g0_add_flash(t, FLASH_OTP_START, FLASH_OTP_SIZE, FLASH_OTP_BLOCKSIZE);
+	stm32g0_add_flash(target, FLASH_OTP_START, FLASH_OTP_SIZE, FLASH_OTP_BLOCKSIZE);
 	return true;
 }
 
-/*
- * In addition to attaching the debug core with cortexm_attach(), this function
- * keeps the FCLK and HCLK clocks running in Standby and Stop modes while
- * debugging.
- * The watchdogs (IWDG and WWDG) are stopped when the core is halted. This
- * allows basic Flash operations (erase/write) if the watchdog is started by
- * hardware or by a previous program without prior power cycle.
- */
-static bool stm32g0_attach(target_s *t)
+static bool stm32g0_attach(target_s *target)
 {
-	stm32g0_priv_s *ps = (stm32g0_priv_s *)t->target_storage;
-
-	if (!cortexm_attach(t))
-		return false;
-
-	ps->saved_regs.rcc_apbenr1 = target_mem32_read32(t, RCC_APBENR1);
-	target_mem32_write32(t, RCC_APBENR1, ps->saved_regs.rcc_apbenr1 | RCC_APBENR1_DBGEN);
-	ps->saved_regs.dbg_cr = target_mem32_read32(t, DBG_CR);
-	target_mem32_write32(t, DBG_CR, ps->saved_regs.dbg_cr | (DBG_CR_DBG_STANDBY | DBG_CR_DBG_STOP));
-	ps->saved_regs.dbg_apb_fz1 = target_mem32_read32(t, DBG_APB_FZ1);
-	target_mem32_write32(
-		t, DBG_APB_FZ1, ps->saved_regs.dbg_apb_fz1 | (DBG_APB_FZ1_DBG_IWDG_STOP | DBG_APB_FZ1_DBG_WWDG_STOP));
-
-	return true;
-}
-
-/*
- * Restore the modified registers and detach the debug core.
- * The registers are restored as is to leave the target in the same state as
- * before attachment.
- */
-static void stm32g0_detach(target_s *t)
-{
-	stm32g0_priv_s *ps = (stm32g0_priv_s *)t->target_storage;
-
 	/*
-	 * First re-enable DBGEN clock, in case it got disabled in the meantime
-	 * (happens during flash), so that writes to DBG_* registers below succeed.
+	 * Try to attach to the part, and then ensure that the WDTs + WFI and WFE
+	 * instructions can't cause problems (this is duplicated as it's undone by detach.)
 	 */
-	target_mem32_write32(t, RCC_APBENR1, ps->saved_regs.rcc_apbenr1 | RCC_APBENR1_DBGEN);
-
-	/* Then restore the DBG_* registers and clock settings. */
-	target_mem32_write32(t, DBG_APB_FZ1, ps->saved_regs.dbg_apb_fz1);
-	target_mem32_write32(t, DBG_CR, ps->saved_regs.dbg_cr);
-	target_mem32_write32(t, RCC_APBENR1, ps->saved_regs.rcc_apbenr1);
-
-	cortexm_detach(t);
+	return cortexm_attach(target) && stm32g0_configure_dbgmcu(target);
 }
 
-static void stm32g0_flash_unlock(target_s *t)
+static void stm32g0_detach(target_s *target)
 {
-	target_mem32_write32(t, FLASH_KEYR, FLASH_KEYR_KEY1);
-	target_mem32_write32(t, FLASH_KEYR, FLASH_KEYR_KEY2);
+	const stm32g0_priv_s *const priv = (stm32g0_priv_s *)target->target_storage;
+	/* Grab the current state of the clock enables */
+	const uint32_t apb_en1 = target_mem32_read32(target, RCC_APBENR1) & ~RCC_APBENR1_DBGEN;
+	/* Ensure that the DBGMCU is still clocked enabled */
+	target_mem32_write32(target, RCC_APBENR1, apb_en1 | RCC_APBENR1_DBGEN);
+	/* Reverse all changes to STM32F4_DBGMCU_CONFIG */
+	target_mem32_write32(target, STM32G0_DBGMCU_CONFIG, priv->dbgmcu_config);
+	/* Disable the DBGMCU clock */
+	target_mem32_write32(target, RCC_APBENR1, apb_en1);
+	/* Now defer to the normal Cortex-M detach routine to complete the detach */
+	cortexm_detach(target);
 }
 
-static void stm32g0_flash_lock(target_s *t)
+static void stm32g0_flash_unlock(target_s *target)
 {
-	const uint32_t ctrl = target_mem32_read32(t, FLASH_CR) | FLASH_CR_LOCK;
-	target_mem32_write32(t, FLASH_CR, ctrl);
+	target_mem32_write32(target, FLASH_KEYR, FLASH_KEYR_KEY1);
+	target_mem32_write32(target, FLASH_KEYR, FLASH_KEYR_KEY2);
 }
 
-static bool stm32g0_wait_busy(target_s *const t, platform_timeout_s *const timeout)
+static void stm32g0_flash_lock(target_s *target)
 {
-	while (target_mem32_read32(t, FLASH_SR) & FLASH_SR_BSY_MASK) {
-		if (target_check_error(t))
+	const uint32_t ctrl = target_mem32_read32(target, FLASH_CR) | FLASH_CR_LOCK;
+	target_mem32_write32(target, FLASH_CR, ctrl);
+}
+
+static bool stm32g0_wait_busy(target_s *const target, platform_timeout_s *const timeout)
+{
+	while (target_mem32_read32(target, FLASH_SR) & FLASH_SR_BSY_MASK) {
+		if (target_check_error(target))
 			return false;
 		if (timeout)
 			target_print_progress(timeout);
@@ -370,48 +357,48 @@ static bool stm32g0_wait_busy(target_s *const t, platform_timeout_s *const timeo
 	return true;
 }
 
-static void stm32g0_flash_op_finish(target_s *t)
+static void stm32g0_flash_op_finish(target_s *target)
 {
-	target_mem32_write32(t, FLASH_SR, FLASH_SR_EOP); // Clear EOP
+	target_mem32_write32(target, FLASH_SR, FLASH_SR_EOP); // Clear EOP
 	/* Clear PG: half-word access not to clear unwanted bits */
-	target_mem32_write16(t, FLASH_CR, 0);
-	stm32g0_flash_lock(t);
+	target_mem32_write16(target, FLASH_CR, 0);
+	stm32g0_flash_lock(target);
 }
 
-static size_t stm32g0_bank1_end_page(target_flash_s *f)
+static size_t stm32g0_bank1_end_page(target_flash_s *flash)
 {
-	target_s *const t = f->t;
+	target_s *const target = flash->t;
 	/* If the part is dual banked, compute the end of the first bank */
-	if (t->part_id == STM32G0B_C)
-		return ((f->length / 2U) - 1U) / f->blocksize;
+	if (target->part_id == ID_STM32G0B_C)
+		return ((flash->length / 2U) - 1U) / flash->blocksize;
 	/* Single banked devices have a fixed bank end */
 	return FLASH_BANK2_START_PAGE - 1U;
 }
 
 /* Erase pages of Flash. In the OTP case, this function clears any previous error and returns. */
-static bool stm32g0_flash_erase(target_flash_s *f, const target_addr_t addr, const size_t len)
+static bool stm32g0_flash_erase(target_flash_s *flash, const target_addr_t addr, const size_t len)
 {
-	target_s *const t = f->t;
+	target_s *const target = flash->t;
 
 	/* Wait for Flash ready */
-	if (!stm32g0_wait_busy(t, NULL)) {
-		stm32g0_flash_op_finish(t);
+	if (!stm32g0_wait_busy(target, NULL)) {
+		stm32g0_flash_op_finish(target);
 		return false;
 	}
 
 	/* Clear any previous programming error */
-	target_mem32_write32(t, FLASH_SR, target_mem32_read32(t, FLASH_SR));
+	target_mem32_write32(target, FLASH_SR, target_mem32_read32(target, FLASH_SR));
 
 	if (addr >= FLASH_OTP_START) {
-		stm32g0_flash_op_finish(t);
+		stm32g0_flash_op_finish(target);
 		return true;
 	}
 
-	const size_t pages_to_erase = ((len - 1U) / f->blocksize) + 1U;
-	const size_t bank1_end_page = stm32g0_bank1_end_page(f);
-	uint32_t page = (addr - f->start) / f->blocksize;
+	const size_t pages_to_erase = ((len - 1U) / flash->blocksize) + 1U;
+	const size_t bank1_end_page = stm32g0_bank1_end_page(flash);
+	uint32_t page = (addr - flash->start) / flash->blocksize;
 
-	stm32g0_flash_unlock(t);
+	stm32g0_flash_unlock(target);
 
 	for (size_t pages_erased = 0U; pages_erased < pages_to_erase; ++pages_erased, ++page) {
 		/* If the page to erase is after the end of bank 1 but not yet in bank 2, skip */
@@ -421,21 +408,21 @@ static bool stm32g0_flash_erase(target_flash_s *f, const target_addr_t addr, con
 		/* Erase the current page */
 		const uint32_t ctrl =
 			(page << FLASH_CR_PNB_SHIFT) | FLASH_CR_PER | (page >= FLASH_BANK2_START_PAGE ? FLASH_CR_BKER : 0);
-		target_mem32_write32(t, FLASH_CR, ctrl);
-		target_mem32_write32(t, FLASH_CR, ctrl | FLASH_CR_START);
+		target_mem32_write32(target, FLASH_CR, ctrl);
+		target_mem32_write32(target, FLASH_CR, ctrl | FLASH_CR_START);
 
 		/* Wait for the operation to finish and report errors */
-		if (!stm32g0_wait_busy(t, NULL)) {
-			stm32g0_flash_op_finish(t);
+		if (!stm32g0_wait_busy(target, NULL)) {
+			stm32g0_flash_op_finish(target);
 			return false;
 		}
 	}
 
 	/* Check for error */
-	const uint32_t status = target_mem32_read32(t, FLASH_SR);
+	const uint32_t status = target_mem32_read32(target, FLASH_SR);
 	if (status & FLASH_SR_ERROR_MASK)
 		DEBUG_ERROR("stm32g0 flash erase error: sr 0x%" PRIx32 "\n", status);
-	stm32g0_flash_op_finish(t);
+	stm32g0_flash_op_finish(target);
 	return !(status & FLASH_SR_ERROR_MASK);
 }
 
@@ -446,66 +433,66 @@ static bool stm32g0_flash_erase(target_flash_s *f, const target_addr_t addr, con
  * into the main Flash memory without power cycle.
  * OTP area is programmed as the "program" area. It can be programmed 8-bytes at a time.
  */
-static bool stm32g0_flash_write(target_flash_s *f, target_addr_t dest, const void *src, size_t len)
+static bool stm32g0_flash_write(target_flash_s *flash, target_addr_t dest, const void *src, size_t len)
 {
-	target_s *const t = f->t;
-	stm32g0_priv_s *ps = (stm32g0_priv_s *)t->target_storage;
+	target_s *const target = flash->t;
+	stm32g0_priv_s *priv = (stm32g0_priv_s *)target->target_storage;
 
-	if (f->start == FLASH_OTP_START && !ps->irreversible_enabled) {
-		tc_printf(t, "Irreversible operations disabled\n");
-		stm32g0_flash_op_finish(t);
+	if (flash->start == FLASH_OTP_START && !priv->irreversible_enabled) {
+		tc_printf(target, "Irreversible operations disabled\n");
+		stm32g0_flash_op_finish(target);
 		return false;
 	}
 
-	stm32g0_flash_unlock(t);
+	stm32g0_flash_unlock(target);
 	/* Write data to Flash */
-	target_mem32_write32(t, FLASH_CR, FLASH_CR_PG);
-	target_mem32_write(t, dest, src, len);
+	target_mem32_write32(target, FLASH_CR, FLASH_CR_PG);
+	target_mem32_write(target, dest, src, len);
 	/* Wait for completion or an error */
-	if (!stm32g0_wait_busy(t, NULL)) {
+	if (!stm32g0_wait_busy(target, NULL)) {
 		DEBUG_ERROR("stm32g0 flash write: comm error\n");
-		stm32g0_flash_op_finish(t);
+		stm32g0_flash_op_finish(target);
 		return false;
 	}
 
-	const uint32_t status = target_mem32_read32(t, FLASH_SR);
+	const uint32_t status = target_mem32_read32(target, FLASH_SR);
 	if (status & FLASH_SR_ERROR_MASK) {
 		DEBUG_ERROR("stm32g0 flash write error: sr 0x%" PRIx32 "\n", status);
-		stm32g0_flash_op_finish(t);
+		stm32g0_flash_op_finish(target);
 		return false;
 	}
 
-	if (dest == FLASH_START && target_mem32_read32(t, FLASH_START) != 0xffffffffU) {
-		const uint32_t acr = target_mem32_read32(t, FLASH_ACR) & ~FLASH_ACR_EMPTY;
-		target_mem32_write32(t, FLASH_ACR, acr);
+	if (dest == FLASH_START && target_mem32_read32(target, FLASH_START) != 0xffffffffU) {
+		const uint32_t acr = target_mem32_read32(target, FLASH_ACR) & ~FLASH_ACR_EMPTY;
+		target_mem32_write32(target, FLASH_ACR, acr);
 	}
 
-	stm32g0_flash_op_finish(t);
+	stm32g0_flash_op_finish(target);
 	return true;
 }
 
-static bool stm32g0_mass_erase(target_s *t)
+static bool stm32g0_mass_erase(target_s *target)
 {
 	const uint32_t ctrl = FLASH_CR_MER1 | FLASH_CR_MER2 | FLASH_CR_START;
 
-	stm32g0_flash_unlock(t);
-	target_mem32_write32(t, FLASH_CR, ctrl);
+	stm32g0_flash_unlock(target);
+	target_mem32_write32(target, FLASH_CR, ctrl);
 
 	platform_timeout_s timeout;
 	platform_timeout_set(&timeout, 500);
 	/* Wait for completion or an error */
-	if (!stm32g0_wait_busy(t, &timeout)) {
-		stm32g0_flash_op_finish(t);
+	if (!stm32g0_wait_busy(target, &timeout)) {
+		stm32g0_flash_op_finish(target);
 		return false;
 	}
 
 	/* Check for error */
-	const uint16_t status = target_mem32_read32(t, FLASH_SR);
-	stm32g0_flash_op_finish(t);
+	const uint16_t status = target_mem32_read32(target, FLASH_SR);
+	stm32g0_flash_op_finish(target);
 	return !(status & FLASH_SR_ERROR_MASK);
 }
 
-static bool stm32g0_cmd_erase_bank(target_s *t, int argc, const char **argv)
+static bool stm32g0_cmd_erase_bank(target_s *target, int argc, const char **argv)
 {
 	uint32_t ctrl = 0U;
 	if (argc == 2) {
@@ -520,30 +507,30 @@ static bool stm32g0_cmd_erase_bank(target_s *t, int argc, const char **argv)
 	}
 
 	if (!ctrl) {
-		tc_printf(t, "Must specify which bank to erase\n");
+		tc_printf(target, "Must specify which bank to erase\n");
 		return false;
 	}
 
 	/* Erase the Flash bank requested */
-	stm32g0_flash_unlock(t);
-	target_mem32_write32(t, FLASH_CR, ctrl);
+	stm32g0_flash_unlock(target);
+	target_mem32_write32(target, FLASH_CR, ctrl);
 
 	/* Wait for completion or an error */
-	if (!stm32g0_wait_busy(t, NULL)) {
-		stm32g0_flash_lock(t);
+	if (!stm32g0_wait_busy(target, NULL)) {
+		stm32g0_flash_lock(target);
 		return false;
 	}
 
 	/* Check for error */
-	const uint16_t status = target_mem32_read32(t, FLASH_SR);
-	stm32g0_flash_op_finish(t);
+	const uint16_t status = target_mem32_read32(target, FLASH_SR);
+	stm32g0_flash_op_finish(target);
 	return !(status & FLASH_SR_ERROR_MASK);
 }
 
-static void stm32g0_flash_option_unlock(target_s *t)
+static void stm32g0_flash_option_unlock(target_s *target)
 {
-	target_mem32_write32(t, FLASH_OPTKEYR, FLASH_OPTKEYR_KEY1);
-	target_mem32_write32(t, FLASH_OPTKEYR, FLASH_OPTKEYR_KEY2);
+	target_mem32_write32(target, FLASH_OPTKEYR, FLASH_OPTKEYR_KEY1);
+	target_mem32_write32(target, FLASH_OPTKEYR, FLASH_OPTKEYR_KEY2);
 }
 
 typedef enum option_bytes_registers {
@@ -600,42 +587,42 @@ static option_register_s options_def[OPT_REG_COUNT] = {
 	[OPT_REG_SECR] = {FLASH_SECR, 0x00000000},
 };
 
-static void write_registers(target_s *const t, const option_register_s *const regs, const size_t nb_regs)
+static void write_registers(target_s *const target, const option_register_s *const regs, const size_t nb_regs)
 {
 	for (size_t reg = 0U; reg < nb_regs; ++reg) {
 		if (regs[reg].addr > 0U)
-			target_mem32_write32(t, regs[reg].addr, regs[reg].val);
+			target_mem32_write32(target, regs[reg].addr, regs[reg].val);
 	}
 }
 
 /* Program the option bytes. */
-static bool stm32g0_option_write(target_s *const t, const option_register_s *const options_req)
+static bool stm32g0_option_write(target_s *const target, const option_register_s *const options_req)
 {
 	/* Unlock the option bytes Flash */
-	stm32g0_flash_unlock(t);
-	stm32g0_flash_option_unlock(t);
+	stm32g0_flash_unlock(target);
+	stm32g0_flash_option_unlock(target);
 
 	/* Wait for completion or an error */
-	if (!stm32g0_wait_busy(t, NULL))
+	if (!stm32g0_wait_busy(target, NULL))
 		goto exit_error;
 
 	/* Write the new option register values and begin the programming operation */
-	write_registers(t, options_req, OPT_REG_COUNT);
-	target_mem32_write32(t, FLASH_CR, FLASH_CR_OPTSTART);
+	write_registers(target, options_req, OPT_REG_COUNT);
+	target_mem32_write32(target, FLASH_CR, FLASH_CR_OPTSTART);
 
 	/* Wait for completion or an error */
-	if (!stm32g0_wait_busy(t, NULL))
+	if (!stm32g0_wait_busy(target, NULL))
 		goto exit_error;
 
 	/* Ask the device to reload its options bytes */
-	target_mem32_write32(t, FLASH_CR, FLASH_CR_OBL_LAUNCH);
+	target_mem32_write32(target, FLASH_CR, FLASH_CR_OBL_LAUNCH);
 	/* Option bytes loading generates a system reset */
-	tc_printf(t, "Scan and attach again\n");
+	tc_printf(target, "Scan and attach again\n");
 	return true;
 
 exit_error:
 	/* If we encounter any errors, relock the Flash */
-	stm32g0_flash_op_finish(t);
+	stm32g0_flash_op_finish(target);
 	return false;
 }
 
@@ -673,20 +660,20 @@ static bool stm32g0_parse_cmdline_registers(
 }
 
 /* Validates option bytes settings. Only allow level 2 device protection if explicitly allowed. */
-static bool stm32g0_validate_options(target_s *t, const option_register_s *options_req)
+static bool stm32g0_validate_options(target_s *target, const option_register_s *options_req)
 {
-	stm32g0_priv_s *ps = (stm32g0_priv_s *)t->target_storage;
-	const bool valid = (options_req[OPT_REG_OPTR].val & FLASH_OPTR_RDP_MASK) != 0xccU || ps->irreversible_enabled;
+	stm32g0_priv_s *priv = (stm32g0_priv_s *)target->target_storage;
+	const bool valid = (options_req[OPT_REG_OPTR].val & FLASH_OPTR_RDP_MASK) != 0xccU || priv->irreversible_enabled;
 	if (!valid)
-		tc_printf(t, "Irreversible operations disabled\n");
+		tc_printf(target, "Irreversible operations disabled\n");
 	return valid;
 }
 
-static void stm32g0_display_registers(target_s *t)
+static void stm32g0_display_registers(target_s *target)
 {
 	for (size_t i = 0; i < OPT_REG_COUNT; ++i) {
-		const uint32_t val = target_mem32_read32(t, options_def[i].addr);
-		tc_printf(t, "0x%08X: 0x%08X\n", options_def[i].addr, val);
+		const uint32_t val = target_mem32_read32(target, options_def[i].addr);
+		tc_printf(target, "0x%08" PRIX32 ": 0x%08" PRIX32 "\n", options_def[i].addr, val);
 	}
 }
 
@@ -695,46 +682,46 @@ static void stm32g0_display_registers(target_s *t)
  * 1. Increase device protection to level 1 and set PCROP_RDP if not already the case.
  * 2. Reset to defaults.
  */
-static bool stm32g0_cmd_option(target_s *t, int argc, const char **argv)
+static bool stm32g0_cmd_option(target_s *target, int argc, const char **argv)
 {
 	option_register_s options_req[OPT_REG_COUNT] = {{0}};
 
 	if (argc == 2 && strcasecmp(argv[1], "erase") == 0) {
-		if (t->part_id == STM32C011 || t->part_id == STM32C031)
+		if (target->part_id == ID_STM32C011 || target->part_id == ID_STM32C031)
 			options_def[OPT_REG_OPTR].val = FLASH_OPTR_C0x1_DEF;
-		if (!stm32g0_option_write(t, options_def))
+		if (!stm32g0_option_write(target, options_def))
 			goto exit_error;
 	} else if (argc > 2 && (argc & 1U) == 0U && strcasecmp(argv[1], "write") == 0) {
 		if (!stm32g0_parse_cmdline_registers((uint32_t)argc - 2U, argv + 2U, options_req) ||
-			!stm32g0_validate_options(t, options_req) || !stm32g0_option_write(t, options_req))
+			!stm32g0_validate_options(target, options_req) || !stm32g0_option_write(target, options_req))
 			goto exit_error;
 	} else {
-		tc_printf(t, "usage: monitor option erase\n");
-		tc_printf(t, "usage: monitor option write <addr> <val> [<addr> <val>]...\n");
-		stm32g0_display_registers(t);
+		tc_printf(target, "usage: monitor option erase\n");
+		tc_printf(target, "usage: monitor option write <addr> <val> [<addr> <val>]...\n");
+		stm32g0_display_registers(target);
 	}
 	return true;
 
 exit_error:
-	tc_printf(t, "Writing options failed!\n");
+	tc_printf(target, "Writing options failed!\n");
 	return false;
 }
 
 /* Enables the irreversible operation that is level 2 device protection. */
-static bool stm32g0_cmd_irreversible(target_s *t, int argc, const char **argv)
+static bool stm32g0_cmd_irreversible(target_s *target, int argc, const char **argv)
 {
-	stm32g0_priv_s *ps = (stm32g0_priv_s *)t->target_storage;
-	const bool ret = argc != 2 || parse_enable_or_disable(argv[1], &ps->irreversible_enabled);
-	tc_printf(t, "Irreversible operations: %s\n", ps->irreversible_enabled ? "enabled" : "disabled");
+	stm32g0_priv_s *priv = (stm32g0_priv_s *)target->target_storage;
+	const bool ret = argc != 2 || parse_enable_or_disable(argv[1], &priv->irreversible_enabled);
+	tc_printf(target, "Irreversible operations: %s\n", priv->irreversible_enabled ? "enabled" : "disabled");
 	return ret;
 }
 
-static bool stm32g0_cmd_uid(target_s *t, int argc, const char **argv)
+static bool stm32g0_cmd_uid(target_s *target, int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
 	target_addr_t uid_base = STM32G0_UID_BASE;
-	if (t->part_id == STM32C011 || t->part_id == STM32C031)
+	if (target->part_id == ID_STM32C011 || target->part_id == ID_STM32C031)
 		uid_base = STM32C0_UID_BASE;
-	return stm32_uid(t, uid_base);
+	return stm32_uid(target, uid_base);
 }

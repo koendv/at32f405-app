@@ -47,7 +47,7 @@ The bootloader is on [github](https://github.com/koendv/at32f405-uf2boot).
 
 The application is made of several open source projects.
 
-- [CMSIS-DAP](https://github.com/ARM-software/CMSIS-DAP) debugger probe, for use with openocd
+- [free-dap](https://github.com/ataradov/free-dap) debugger probe, for use with openocd
 - [Black Magic Debug](https://github.com/blackmagic-debug/blackmagic), for use with gdb or standalone
 - [tinyuf2](https://github.com/adafruit/tinyuf2) uf2 loader
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) usb protocol stack
@@ -139,7 +139,7 @@ openocd -f interface/cmsis-dap.cfg -f target/at32f402xx.cfg
 
 ### black magic probe
 
-Using [black magic probe](https://black-magic.org/index.html). First [add support for AT32F405](applications/blackmagic-rtthread/port/at32f405.patch). Compile and install the firmware. Connect black magic probe to the AT32F405 SWD port. Command line:
+Using [black magic probe](https://black-magic.org/index.html). First [add support for AT32F405](applications/blackmagic-rtthread/patches/at32f405.patch). Compile and install the firmware. Connect black magic probe to the AT32F405 SWD port. Command line:
 
 ```sh
 $ arm-none-eabi-gdb -q

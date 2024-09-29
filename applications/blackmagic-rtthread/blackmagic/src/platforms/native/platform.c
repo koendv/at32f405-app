@@ -156,6 +156,8 @@ void platform_init(void)
 		rcc_periph_clock_enable(RCC_GPIOC);
 	if (hwversion >= 1)
 		rcc_periph_clock_enable(RCC_TIM1);
+	/* Make sure to power up the timer used for trace */
+	rcc_periph_clock_enable(RCC_TIM3);
 	rcc_periph_clock_enable(RCC_AFIO);
 	rcc_periph_clock_enable(RCC_CRC);
 
@@ -165,6 +167,7 @@ void platform_init(void)
 
 	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_OUTPUT_PUSHPULL, TMS_DIR_PIN | TCK_PIN | TDI_PIN);
 	gpio_set_mode(JTAG_PORT, GPIO_MODE_OUTPUT_50_MHZ, GPIO_CNF_INPUT_FLOAT, TMS_PIN);
+	gpio_set_mode(JTAG_PORT, GPIO_MODE_INPUT, GPIO_CNF_INPUT_FLOAT, TDO_PIN);
 
 	/* This needs some fixing... */
 	/* Toggle required to sort out line drivers... */
@@ -262,7 +265,7 @@ void platform_init(void)
 		gpio_set_mode(GPIOB, GPIO_MODE_INPUT, GPIO_CNF_INPUT_PULL_UPDOWN, GPIO0);
 	}
 	/* Set up the NVIC vector table for the firmware */
-	SCB_VTOR = (uint32_t)&vector_table; // NOLINT(clang-diagnostic-pointer-to-int-cast)
+	SCB_VTOR = (uintptr_t)&vector_table; // NOLINT(clang-diagnostic-pointer-to-int-cast, performance-no-int-to-ptr)
 
 	platform_timing_init();
 	blackmagic_usb_init();
@@ -566,4 +569,14 @@ static void setup_vbus_irq(void)
 	exti_enable_request(usb_vbus_pin);
 
 	exti15_10_isr();
+}
+
+void dma1_channel5_isr(void)
+{
+	if (hwversion < 6)
+		usart1_rx_dma_isr();
+#if SWO_ENCODING != 1
+	else
+		swo_dma_isr();
+#endif
 }

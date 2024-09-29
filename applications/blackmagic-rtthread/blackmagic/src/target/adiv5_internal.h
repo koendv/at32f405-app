@@ -27,7 +27,7 @@
 #include <stddef.h>
 #include "adiv5.h"
 
-#define ADIV5_APnDP     0x100U
+#define ADIV5_APnDP     0x1000U
 #define ADIV5_DP_REG(x) (x)
 #define ADIV5_AP_REG(x) (ADIV5_APnDP | (x))
 
@@ -65,19 +65,82 @@
 #define ADIV5_DP_BANK2 2U
 #define ADIV5_DP_BANK3 3U
 #define ADIV5_DP_BANK4 4U
+#define ADIV5_DP_BANK5 5U
 
-/* ADIv5 MEM-AP Registers */
-#define ADIV5_AP_CSW      ADIV5_AP_REG(0x00U)
-#define ADIV5_AP_TAR_LOW  ADIV5_AP_REG(0x04U)
-#define ADIV5_AP_TAR_HIGH ADIV5_AP_REG(0x08U)
+/*
+ * ADIv5 MEM-AP Registers
+ *
+ * The upper 4 bits of the uint16_t are used to encode A[11:8] for ADIv6.
+ * XXX: We would use the form <0b000 APnDP A[11:0]> instead of <A[11:8] 0b000 APnDP A[7:0]>,
+ * however this would be incompatible with older firmware and the remote protocol.
+ * This should be adjusted because we can do some encoding shenanigans to make that work
+ * in BMDA, but this has been chosen to make something work in the immediate present.
+ */
+#define ADIV5_AP_CSW      ADIV5_AP_REG(0xd00U)
+#define ADIV5_AP_TAR_LOW  ADIV5_AP_REG(0xd04U)
+#define ADIV5_AP_TAR_HIGH ADIV5_AP_REG(0xd08U)
 /* 0x08 - Reserved */
-#define ADIV5_AP_DRW   ADIV5_AP_REG(0x0cU)
-#define ADIV5_AP_DB(x) ADIV5_AP_REG(0x10U + (4U * (x)))
+#define ADIV5_AP_DRW   ADIV5_AP_REG(0xd0cU)
+#define ADIV5_AP_DB(x) ADIV5_AP_REG(0xd10U + (4U * (x)))
 /* 0x20:0xec - Reserved */
-#define ADIV5_AP_BASE_HIGH ADIV5_AP_REG(0xf0U)
-#define ADIV5_AP_CFG       ADIV5_AP_REG(0xf4U)
-#define ADIV5_AP_BASE_LOW  ADIV5_AP_REG(0xf8U)
-#define ADIV5_AP_IDR       ADIV5_AP_REG(0xfcU)
+#define ADIV5_AP_BASE_HIGH ADIV5_AP_REG(0xdf0U)
+#define ADIV5_AP_CFG       ADIV5_AP_REG(0xdf4U)
+#define ADIV5_AP_BASE_LOW  ADIV5_AP_REG(0xdf8U)
+#define ADIV5_AP_IDR       ADIV5_AP_REG(0xdfcU)
+
+/* ROM table CIDR values */
+#define CIDR0_OFFSET 0xff0U /* DBGCID0 */
+#define CIDR1_OFFSET 0xff4U /* DBGCID1 */
+#define CIDR2_OFFSET 0xff8U /* DBGCID2 */
+#define CIDR3_OFFSET 0xffcU /* DBGCID3 */
+
+#define PIDR0_OFFSET 0xfe0U /* DBGPID0 */
+#define PIDR1_OFFSET 0xfe4U /* DBGPID1 */
+#define PIDR2_OFFSET 0xfe8U /* DBGPID2 */
+#define PIDR3_OFFSET 0xfecU /* DBGPID3 */
+#define PIDR4_OFFSET 0xfd0U /* DBGPID4 */
+#define PIDR5_OFFSET 0xfd4U /* DBGPID5 (Reserved) */
+#define PIDR6_OFFSET 0xfd8U /* DBGPID6 (Reserved) */
+#define PIDR7_OFFSET 0xfdcU /* DBGPID7 (Reserved) */
+
+#define DEVTYPE_OFFSET 0xfccU /* CoreSight Device Type Register */
+#define DEVARCH_OFFSET 0xfbcU /* CoreSight Device Architecture Register */
+
+/*
+ * Component class ID register can be broken down into the following logical
+ * interpretation of the 32bit value consisting of the least significant bytes
+ * of the 4 CID registers:
+ * |7   ID3 reg   0|7   ID2 reg   0|7   ID1 reg   0|7   ID0 reg   0|
+ * |1|0|1|1|0|0|0|1|0|0|0|0|0|1|0|1| | | | |0|0|0|0|0|0|0|0|1|1|0|1|
+ * |31           24|23           16|15   12|11     |              0|
+ * \_______________ ______________/\___ __/\___________ ___________/
+ *                 V                   V               V
+ *             Preamble            Component       Preamble
+ *                                   Class
+ * \_______________________________ _______________________________/
+ *                                 V
+ *                           Component ID
+ */
+#define CID_PREAMBLE    UINT32_C(0xb105000d)
+#define CID_CLASS_MASK  UINT32_C(0x0000f000)
+#define CID_CLASS_SHIFT 12U
+
+#define PIDR_JEP106_CONT_OFFSET 32U                                         /*JEP-106 Continuation Code offset */
+#define PIDR_JEP106_CONT_MASK   (UINT64_C(0xf) << PIDR_JEP106_CONT_OFFSET)  /*JEP-106 Continuation Code mask */
+#define PIDR_REV_OFFSET         20U                                         /* Revision bits offset */
+#define PIDR_REV_MASK           (UINT64_C(0xfff) << PIDR_REV_OFFSET)        /* Revision bits mask */
+#define PIDR_JEP106_USED_OFFSET 19U                                         /* JEP-106 code used flag offset */
+#define PIDR_JEP106_USED        (UINT64_C(1) << PIDR_JEP106_USED_OFFSET)    /* JEP-106 code used flag */
+#define PIDR_JEP106_CODE_OFFSET 12U                                         /* JEP-106 code offset */
+#define PIDR_JEP106_CODE_MASK   (UINT64_C(0x7f) << PIDR_JEP106_CODE_OFFSET) /* JEP-106 code mask */
+#define PIDR_PN_MASK            UINT64_C(0xfff)                             /* Part number */
+#define PIDR_SIZE_OFFSET        36U
+#define PIDR_SIZE_MASK          (UINT64_C(0xf) << PIDR_SIZE_OFFSET)
+
+#define DEVTYPE_MASK               0x000000ffU
+#define DEVARCH_ARCHID_MASK        0xffffU
+#define DEVARCH_ARCHID_ROMTABLE_V0 0x0af7U
+#define DEVARCH_PRESENT            (1U << 20U)
 
 #define SWDP_ACK_OK          0x01U
 #define SWDP_ACK_WAIT        0x02U
@@ -128,9 +191,12 @@ struct adiv5_debug_port {
 	uint16_t designer_code;
 	uint16_t partno;
 
-	/* TARGETID designer and partno, present on DPv2 */
+	/* TARGETID designer and partno, present on DPv2+ */
 	uint16_t target_designer_code;
 	uint16_t target_partno;
+
+	/* DPv3+ bus address width */
+	uint8_t address_width;
 };
 
 struct adiv5_access_port {
@@ -149,6 +215,44 @@ struct adiv5_access_port {
 	uint16_t designer_code;
 	uint16_t partno;
 };
+
+/* The following enum is based on the Component Class value table 13-3 of the ADIv5 specification. */
+typedef enum cid_class {
+	cidc_gvc = 0x0,     /* Generic verification component*/
+	cidc_romtab = 0x1,  /* ROM Table, std. layout (ADIv5 Chapter 14) */
+	/* 0x2 - 0x8 */     /* Reserved */
+	cidc_dc = 0x9,      /* Debug component, std. layout (CoreSight Arch. Spec.) */
+	/* 0xa */           /* Reserved */
+	cidc_ptb = 0xb,     /* Peripheral Test Block (PTB) */
+	/* 0xc */           /* Reserved */
+	cidc_dess = 0xd,    /* OptimoDE Data Engine SubSystem (DESS) component */
+	cidc_gipc = 0xe,    /* Generic IP Component */
+	cidc_sys = 0xf,     /* CoreLink, PrimeCell, or other system component with no standard register layout */
+	cidc_unknown = 0x10 /* Not a valid component class */
+} cid_class_e;
+
+/* Enumeration of CoreSight component architectures */
+typedef enum arm_arch {
+	aa_nosupport,
+	aa_cortexm,
+	aa_cortexa,
+	aa_cortexr,
+	aa_access_port,
+	aa_end
+} arm_arch_e;
+
+/* Structure defining an ARM CoreSight component of some kind */
+typedef struct arm_coresight_component {
+	uint16_t part_number;
+	uint8_t dev_type;
+	uint16_t arch_id;
+	arm_arch_e arch;
+	cid_class_e cidc;
+#if ENABLE_DEBUG == 1
+	const char *type;
+	const char *full;
+#endif
+} arm_coresight_component_s;
 
 /* Helper for building an ADIv5 request */
 uint8_t make_packet_request(uint8_t rnw, uint16_t addr);

@@ -42,6 +42,8 @@
 #include "protocol_v4.h"
 #include "protocol_v4_defs.h"
 #include "protocol_v4_adiv5.h"
+#include "protocol_v4_adiv6.h"
+#include "protocol_v4_riscv.h"
 
 bool remote_v4_init(void)
 {
@@ -71,6 +73,24 @@ bool remote_v4_init(void)
 	/* Now fill in acceleration-specific functions */
 	if (accelerations & REMOTE_ACCEL_ADIV5)
 		remote_funcs.adiv5_init = remote_v4_adiv5_init;
+	if (accelerations & REMOTE_ACCEL_ADIV6)
+		remote_funcs.adiv6_init = remote_v4_adiv6_init;
+	if (accelerations & REMOTE_ACCEL_RISCV) {
+		/* For RISC-V we have to ask the acceleration backend what protocols it supports */
+		platform_buffer_write(REMOTE_RISCV_PROTOCOLS_STR, sizeof(REMOTE_RISCV_PROTOCOLS_STR));
+
+		const ssize_t protocols_length = platform_buffer_read(buffer, REMOTE_MAX_MSG_SIZE);
+		/* Check for communication failures */
+		if (protocols_length < 1 || buffer[0] != REMOTE_RESP_OK) {
+			DEBUG_ERROR("%s comms error: %zd\n", __func__, protocols_length);
+			return false;
+		}
+
+		const uint64_t riscv_protocols = remote_decode_response(buffer + 1, protocols_length - 1);
+
+		if (riscv_protocols & REMOTE_RISCV_PROTOCOL_JTAG)
+			remote_funcs.riscv_jtag_init = remote_v4_riscv_jtag_init;
+	}
 
 	return true;
 }
@@ -83,5 +103,33 @@ bool remote_v4_adiv5_init(adiv5_debug_port_s *const dp)
 	dp->ap_write = remote_v3_adiv5_ap_write;
 	dp->mem_read = remote_v4_adiv5_mem_read_bytes;
 	dp->mem_write = remote_v4_adiv5_mem_write_bytes;
+	return true;
+}
+
+bool remote_v4_adiv6_init(adiv5_debug_port_s *dp)
+{
+	dp->ap_read = remote_v4_adiv6_ap_read;
+	dp->ap_write = remote_v4_adiv6_ap_write;
+	dp->mem_read = remote_v4_adiv6_mem_read_bytes;
+	dp->mem_write = remote_v4_adiv6_mem_write_bytes;
+	return true;
+}
+
+bool remote_v4_riscv_jtag_init(riscv_dmi_s *const dmi)
+{
+	/* Format the RISC-V JTAG DTM init request into a new buffer and send it to the probe */
+	char buffer[REMOTE_MAX_MSG_SIZE];
+	ssize_t length = snprintf(buffer, REMOTE_MAX_MSG_SIZE, REMOTE_RISCV_INIT_STR, REMOTE_RISCV_JTAG);
+	platform_buffer_write(buffer, length);
+
+	/* Read back the answer and check for errors */
+	length = platform_buffer_read(buffer, REMOTE_MAX_MSG_SIZE);
+	if (length < 1 || buffer[0U] != REMOTE_RESP_OK) {
+		DEBUG_ERROR("%s failed, error %s\n", __func__, length ? buffer + 1 : "with communication");
+		return false;
+	}
+
+	dmi->read = remote_v4_riscv_jtag_dmi_read;
+	dmi->write = remote_v4_riscv_jtag_dmi_write;
 	return true;
 }

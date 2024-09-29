@@ -8,23 +8,9 @@
 /// black magic probe gdb interface
 ///////////////////////////////////////
 
-#define GDB_BUFFER_LEN 512
+#define GDB_BUFFER_LEN 511
 static size_t gdb_buffer_used = 0U;
 static char gdb_buffer[GDB_BUFFER_LEN];
-
-/* read one character from gdb port */
-char gdb_if_getchar(void)
-{
-	// XXX fixme
-	return -1;
-}
-
-/* read one character from gdb port, with a timeout if no character read with x ms */
-char gdb_if_getchar_to(const uint32_t timeout_ms)
-{
-	// XXX fixme
-	return -1;
-}
 
 void gdb_if_putchar(const char c, const int flush)
 {

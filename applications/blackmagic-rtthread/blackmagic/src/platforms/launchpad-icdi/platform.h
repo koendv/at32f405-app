@@ -23,23 +23,26 @@
 
 #include "timing.h"
 
+#define PLATFORM_HAS_TRACESWO
+#define SWO_ENCODING 2 /* Use only UART mode SWO recovery */
+
 #define PLATFORM_IDENT "(Launchpad ICDI) "
 
 extern uint8_t running_status;
 
-#define TMS_PORT GPIOA_BASE
+#define TMS_PORT GPIOA
 #define TMS_PIN  GPIO3
 
-#define TCK_PORT GPIOA_BASE
+#define TCK_PORT GPIOA
 #define TCK_PIN  GPIO2
 
-#define TDI_PORT GPIOA_BASE
+#define TDI_PORT GPIOA
 #define TDI_PIN  GPIO5
 
-#define TDO_PORT GPIOA_BASE
+#define TDO_PORT GPIOA
 #define TDO_PIN  GPIO4
 
-#define SWO_PORT GPIOD_BASE
+#define SWO_PORT GPIOD
 #define SWO_PIN  GPIO6
 
 #define SWDIO_PORT TMS_PORT
@@ -48,7 +51,7 @@ extern uint8_t running_status;
 #define SWCLK_PORT TCK_PORT
 #define SWCLK_PIN  TCK_PIN
 
-#define NRST_PORT GPIOA_BASE
+#define NRST_PORT GPIOA
 #define NRST_PIN  GPIO6
 
 #define TMS_SET_MODE()                                                            \
@@ -72,7 +75,8 @@ extern uint8_t running_status;
 #define USB_IRQ    NVIC_USB0_IRQ
 #define USB_ISR    usb0_isr
 
-#define IRQ_PRI_USB (2 << 4)
+#define IRQ_PRI_USB      (2U << 4U)
+#define IRQ_PRI_SWO_UART (0U << 4U)
 
 #define USBUART     UART0
 #define USBUART_CLK RCC_UART0
@@ -89,10 +93,13 @@ extern uint8_t running_status;
 		gpio_mode_setup(GPIOA_BASE, GPIO_MODE_INPUT, GPIO_PUPD_NONE, GPIO1);  \
 	} while (0)
 
-#define TRACEUART     UART2
-#define TRACEUART_CLK RCC_UART2
-#define TRACEUART_IRQ NVIC_UART2_IRQ
-#define TRACEUART_ISR uart2_isr
+#define SWO_UART        UART2
+#define SWO_UART_CLK    RCC_UART2
+#define SWO_UART_PORT   GPIOD
+#define SWO_UART_RX_PIN GPIO6
+#define SWO_UART_PIN_AF 1U
+#define SWO_UART_IRQ    NVIC_UART2_IRQ
+#define SWO_UART_ISR(x) uart2_isr(x)
 
 #define SET_RUN_STATE(state)      \
 	{                             \
@@ -103,16 +110,14 @@ extern uint8_t running_status;
 	}
 #define SET_ERROR_STATE(state) SET_IDLE_STATE(state)
 
-#define PLATFORM_HAS_TRACESWO
-
 inline static void gpio_set_val(uint32_t port, uint8_t pin, uint8_t val)
 {
-	gpio_write(port, pin, val == 0 ? 0 : 0xff);
+	gpio_write(port, pin, val == 0U ? 0U : 0xffU);
 }
 
 inline static uint8_t gpio_get(uint32_t port, uint8_t pin)
 {
-	return !(gpio_read(port, pin) == 0);
+	return gpio_read(port, pin) != 0U;
 }
 
 #define disconnect_usb()            \

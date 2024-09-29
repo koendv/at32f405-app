@@ -14,12 +14,14 @@ LDFLAGS = -lopencm3_stm32f0 -Lplatforms/f072 \
 VPATH += platforms/common/stm32
 
 SRC +=               \
-	platform.c \
-	traceswodecode.c \
-	traceswo.c	\
-	serialno.c	\
-	timing.c	\
-	timing_stm32.c	\
+	platform.c       \
+	atomic.c         \
+	serialno.c       \
+	timing.c         \
+	timing_stm32.c   \
+	swo.c            \
+	swo_manchester.c \
+	swo_itm_decode.c
 
 all:	blackmagic.bin
 blackmagic.elf: libopencm3_stm32f0

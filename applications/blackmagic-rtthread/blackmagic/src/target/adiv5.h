@@ -181,8 +181,11 @@
 
 #define ADIV5_AP_CFG_LARGE_ADDRESS (1U << 1U)
 
-#define ADIV5_AP_FLAGS_64BIT   (1U << 0U)
-#define ADIV5_AP_FLAGS_HAS_MEM (1U << 1U)
+/* Flags values for the AP's flags field */
+#define ADIV5_AP_FLAGS_64BIT           (1U << 0U)
+#define ADIV5_AP_FLAGS_HAS_MEM         (1U << 1U)
+#define ADIV6_DP_FLAGS_HAS_PWRCTRL     (1U << 2U)
+#define ADIV6_DP_FLAGS_HAS_SYSRESETREQ (1U << 3U)
 
 /* ADIv5 Class 0x1 ROM Table Registers */
 #define ADIV5_ROM_MEMTYPE          0xfccU
@@ -243,9 +246,8 @@ const void *adiv5_pack_data(target_addr32_t dest, const void *src, uint32_t *dat
 void adiv5_mem_write(adiv5_access_port_s *ap, target_addr64_t dest, const void *src, size_t len);
 
 /* ADIv5 low-level logical operation functions for memory access */
-void adiv5_mem_access_setup(adiv5_access_port_s *ap, target_addr64_t addr, align_e align);
 void adiv5_mem_write_bytes(adiv5_access_port_s *ap, target_addr64_t dest, const void *src, size_t len, align_e align);
-void advi5_mem_read_bytes(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t len);
+void adiv5_mem_read_bytes(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t len);
 /* ADIv5 logical operation functions for AP register I/O */
 void adiv5_ap_reg_write(adiv5_access_port_s *ap, uint16_t addr, uint32_t value);
 uint32_t adiv5_ap_reg_read(adiv5_access_port_s *ap, uint16_t addr);

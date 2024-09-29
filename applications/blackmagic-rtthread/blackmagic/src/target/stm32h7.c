@@ -134,21 +134,21 @@
  * Base address for the DBGMCU peripehral for access from the processor
  * address space. For access via AP2, use base address 0xe00e1000.
  */
-#define DBGMCU_BASE       0x5c001000U
-#define DBGMCU_IDCODE     (DBGMCU_BASE + 0x000U)
-#define DBGMCU_CONFIG     (DBGMCU_BASE + 0x004U)
-#define DBGMCU_APB3FREEZE (DBGMCU_BASE + 0x034U)
-#define DBGMCU_APB4FREEZE (DBGMCU_BASE + 0x054U)
+#define STM32H7_DBGMCU_BASE       0x5c001000U
+#define STM32H7_DBGMCU_IDCODE     (STM32H7_DBGMCU_BASE + 0x000U)
+#define STM32H7_DBGMCU_CONFIG     (STM32H7_DBGMCU_BASE + 0x004U)
+#define STM32H7_DBGMCU_APB3FREEZE (STM32H7_DBGMCU_BASE + 0x034U)
+#define STM32H7_DBGMCU_APB4FREEZE (STM32H7_DBGMCU_BASE + 0x054U)
 
-#define DBGMCU_CONFIG_DBGSLEEP_D1 (1U << 0U)
-#define DBGMCU_CONFIG_DBGSTOP_D1  (1U << 1U)
-#define DBGMCU_CONFIG_DBGSTBY_D1  (1U << 2U)
-#define DBGMCU_CONFIG_DBGSTOP_D3  (1U << 7U)
-#define DBGMCU_CONFIG_DBGSTBY_D3  (1U << 8U)
-#define DBGMCU_CONFIG_D1DBGCKEN   (1U << 21U)
-#define DBGMCU_CONFIG_D3DBGCKEN   (1U << 22U)
-#define DBGMCU_APB3FREEZE_WWDG1   (1U << 6U)
-#define DBGMCU_APB4FREEZE_IWDG1   (1U << 18U)
+#define STM32H7_DBGMCU_CONFIG_DBGSLEEP_D1 (1U << 0U)
+#define STM32H7_DBGMCU_CONFIG_DBGSTOP_D1  (1U << 1U)
+#define STM32H7_DBGMCU_CONFIG_DBGSTBY_D1  (1U << 2U)
+#define STM32H7_DBGMCU_CONFIG_DBGSTOP_D3  (1U << 7U)
+#define STM32H7_DBGMCU_CONFIG_DBGSTBY_D3  (1U << 8U)
+#define STM32H7_DBGMCU_CONFIG_D1DBGCKEN   (1U << 21U)
+#define STM32H7_DBGMCU_CONFIG_D3DBGCKEN   (1U << 22U)
+#define STM32H7_DBGMCU_APB3FREEZE_WWDG1   (1U << 6U)
+#define STM32H7_DBGMCU_APB4FREEZE_IWDG1   (1U << 18U)
 
 #define STM32H7_DBGMCU_IDCODE_DEV_MASK  0x00000fffU
 #define STM32H7_DBGMCU_IDCODE_REV_SHIFT 16U
@@ -187,7 +187,7 @@ typedef struct stm32h7_flash {
 } stm32h7_flash_s;
 
 typedef struct stm32h7_priv {
-	uint32_t dbg_cr;
+	uint32_t dbgmcu_config;
 	char name[STM32H7_NAME_MAX_LENGTH];
 } stm32h7_priv_s;
 
@@ -244,7 +244,7 @@ static void stm32h7_add_flash(target_s *target, uint32_t addr, size_t length, si
 	target_add_flash(target, target_flash);
 }
 
-void stm32h7_configure_wdts(target_s *const target)
+static void stm32h7_configure_wdts(target_s *const target)
 {
 	/*
 	 * Feed the watchdogs to ensure things are stable - though note that the DBGMCU writes
@@ -260,6 +260,16 @@ bool stm32h7_probe(target_s *target)
 	/* Use the partno from the AP always to handle the difference between JTAG and SWD */
 	if (ap->partno != ID_STM32H72x && ap->partno != ID_STM32H74x && ap->partno != ID_STM32H7Bx)
 		return false;
+
+	/* By now it's established that this is likely an H7, but check that it's not an MP15x_CM4 with an errata in AP part code */
+	const uint32_t idcode = target_mem32_read32(target, STM32H7_DBGMCU_IDCODE);
+	const uint16_t dev_id = idcode & STM32H7_DBGMCU_IDCODE_DEV_MASK;
+	DEBUG_TARGET(
+		"%s: looking at device ID 0x%03x at 0x%08" PRIx32 "\n", __func__, dev_id, (uint32_t)STM32H7_DBGMCU_IDCODE);
+	/* MP15x_CM4 errata: has a partno of 0x450. SoC DBGMCU says 0x500. */
+	if (dev_id != ID_STM32H72x && dev_id != ID_STM32H74x && dev_id != ID_STM32H7Bx)
+		return false;
+
 	target->part_id = ap->partno;
 
 	/* Save private storage */
@@ -268,7 +278,7 @@ bool stm32h7_probe(target_s *target)
 		DEBUG_ERROR("calloc: failed in %s\n", __func__);
 		return false;
 	}
-	priv_storage->dbg_cr = target_mem32_read32(target, DBGMCU_CONFIG);
+	priv_storage->dbgmcu_config = target_mem32_read32(target, STM32H7_DBGMCU_CONFIG);
 	target->target_storage = priv_storage;
 
 	memcpy(priv_storage->name, "STM32", 5U);
@@ -276,6 +286,12 @@ bool stm32h7_probe(target_s *target)
 	case ID_STM32H72x:
 		write_be4((uint8_t *)priv_storage->name, 5U, target_mem32_read32(target, STM32H7_CHIP_IDENT));
 		priv_storage->name[9] = '\0';
+		break;
+	case ID_STM32H74x:
+		memcpy(priv_storage->name + 5U, "H74x", 5U); /* H742/H743/H753/H750 */
+		break;
+	case ID_STM32H7Bx:
+		memcpy(priv_storage->name + 5U, "H7Bx", 5U); /* H7A3/H7B3/H7B0 */
 		break;
 	default:
 		memcpy(priv_storage->name + 5U, "H7", 3U);
@@ -289,15 +305,15 @@ bool stm32h7_probe(target_s *target)
 	target_add_commands(target, stm32h7_cmd_list, target->driver);
 
 	/* Now we have a stable debug environment, make sure the WDTs can't bonk the processor out from under us */
-	target_mem32_write32(target, DBGMCU_APB3FREEZE, DBGMCU_APB3FREEZE_WWDG1);
-	target_mem32_write32(target, DBGMCU_APB4FREEZE, DBGMCU_APB4FREEZE_IWDG1);
+	target_mem32_write32(target, STM32H7_DBGMCU_APB3FREEZE, STM32H7_DBGMCU_APB3FREEZE_WWDG1);
+	target_mem32_write32(target, STM32H7_DBGMCU_APB4FREEZE, STM32H7_DBGMCU_APB4FREEZE_IWDG1);
 	/*
 	 * Make sure that both domain D1 and D3 debugging are enabled and that we can keep
 	 * debugging through sleep, stop and standby states for domain D1
 	 */
-	target_mem32_write32(target, DBGMCU_CONFIG,
-		DBGMCU_CONFIG_DBGSLEEP_D1 | DBGMCU_CONFIG_DBGSTOP_D1 | DBGMCU_CONFIG_DBGSTBY_D1 | DBGMCU_CONFIG_D1DBGCKEN |
-			DBGMCU_CONFIG_D3DBGCKEN);
+	target_mem32_write32(target, STM32H7_DBGMCU_CONFIG,
+		priv_storage->dbgmcu_config | STM32H7_DBGMCU_CONFIG_DBGSLEEP_D1 | STM32H7_DBGMCU_CONFIG_DBGSTOP_D1 |
+			STM32H7_DBGMCU_CONFIG_DBGSTBY_D1 | STM32H7_DBGMCU_CONFIG_D1DBGCKEN | STM32H7_DBGMCU_CONFIG_D3DBGCKEN);
 	stm32h7_configure_wdts(target);
 
 	/* Build the RAM map */
@@ -397,17 +413,17 @@ static bool stm32h7_attach(target_s *target)
 	 * Make sure that both domain D1 and D3 debugging are enabled and that we can keep
 	 * debugging through sleep, stop and standby states for domain D1 - this is duplicated as it's undone by detach.
 	 */
-	target_mem32_write32(target, DBGMCU_CONFIG,
-		DBGMCU_CONFIG_DBGSLEEP_D1 | DBGMCU_CONFIG_DBGSTOP_D1 | DBGMCU_CONFIG_DBGSTBY_D1 | DBGMCU_CONFIG_D1DBGCKEN |
-			DBGMCU_CONFIG_D3DBGCKEN);
+	target_mem32_write32(target, STM32H7_DBGMCU_CONFIG,
+		STM32H7_DBGMCU_CONFIG_DBGSLEEP_D1 | STM32H7_DBGMCU_CONFIG_DBGSTOP_D1 | STM32H7_DBGMCU_CONFIG_DBGSTBY_D1 |
+			STM32H7_DBGMCU_CONFIG_D1DBGCKEN | STM32H7_DBGMCU_CONFIG_D3DBGCKEN);
 	stm32h7_configure_wdts(target);
 	return true;
 }
 
 static void stm32h7_detach(target_s *target)
 {
-	stm32h7_priv_s *ps = (stm32h7_priv_s *)target->target_storage;
-	target_mem32_write32(target, DBGMCU_CONFIG, ps->dbg_cr);
+	stm32h7_priv_s *priv = (stm32h7_priv_s *)target->target_storage;
+	target_mem32_write32(target, STM32H7_DBGMCU_CONFIG, priv->dbgmcu_config);
 	cortexm_detach(target);
 }
 
@@ -666,7 +682,7 @@ static bool stm32h7_crc(target_s *target, int argc, const char **argv)
 	if (!stm32h7_crc_bank(target, STM32H7_FLASH_BANK2_BASE))
 		return false;
 	uint32_t crc2 = target_mem32_read32(target, STM32H7_FPEC2_BASE + STM32H7_FLASH_CRCDATA);
-	tc_printf(target, "CRC: bank1 0x%08lx, bank2 0x%08lx\n", crc1, crc2);
+	tc_printf(target, "CRC: bank1 0x%08" PRIx32 ", bank2 0x%08" PRIx32 " \n", crc1, crc2);
 	return true;
 }
 
@@ -718,7 +734,7 @@ static bool stm32h7_cmd_rev(target_s *target, int argc, const char **argv)
 {
 	(void)argc;
 	(void)argv;
-	const uint32_t idcode = target_mem32_read32(target, DBGMCU_IDCODE);
+	const uint32_t idcode = target_mem32_read32(target, STM32H7_DBGMCU_IDCODE);
 	const uint16_t rev_id = idcode >> STM32H7_DBGMCU_IDCODE_REV_SHIFT;
 	const uint16_t dev_id = idcode & STM32H7_DBGMCU_IDCODE_DEV_MASK;
 

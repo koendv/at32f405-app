@@ -3,7 +3,7 @@
  *
  * Copyright (C) 2019  Black Sphere Technologies Ltd.
  * Written by Dave Marples <dave@marples.net>
- * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2022-2024 1BitSquared <info@1bitsquared.com>
  * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -251,8 +251,9 @@
 #define REMOTE_ACCEL_ADIV5     (1U << 0U)
 #define REMOTE_ACCEL_CORTEX_AR (1U << 1U)
 #define REMOTE_ACCEL_RISCV     (1U << 2U)
+#define REMOTE_ACCEL_ADIV6     (1U << 3U)
 
-/* ADIv5 protocol elements */
+/* ADIv5 accleration protocol elements */
 #define REMOTE_ADIV5_PACKET     'A'
 #define REMOTE_DP_READ          'd'
 #define REMOTE_AP_READ          'a'
@@ -270,19 +271,21 @@
 #define REMOTE_ADIV5_ALIGNMENT REMOTE_UINT8
 #define REMOTE_ADIV5_COUNT     REMOTE_UINT32
 
-#define REMOTE_DP_READ_STR                                                                                      \
+#define REMOTE_ADIV5_APnDP 0x0100U
+
+#define REMOTE_ADIV5_DP_READ_STR                                                                                \
 	(char[])                                                                                                    \
 	{                                                                                                           \
 		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_DP_READ, REMOTE_ADIV5_DEV_INDEX, 'f', 'f', REMOTE_ADIV5_ADDR16, \
 			REMOTE_EOM, 0                                                                                       \
 	}
-#define REMOTE_AP_READ_STR                                                                            \
+#define REMOTE_ADIV5_AP_READ_STR                                                                      \
 	(char[])                                                                                          \
 	{                                                                                                 \
 		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_AP_READ, REMOTE_ADIV5_DEV_INDEX, REMOTE_ADIV5_AP_SEL, \
 			REMOTE_ADIV5_ADDR16, REMOTE_EOM, 0                                                        \
 	}
-#define REMOTE_AP_WRITE_STR                                                                            \
+#define REMOTE_ADIV5_AP_WRITE_STR                                                                      \
 	(char[])                                                                                           \
 	{                                                                                                  \
 		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_AP_WRITE, REMOTE_ADIV5_DEV_INDEX, REMOTE_ADIV5_AP_SEL, \
@@ -300,11 +303,8 @@
 		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_MEM_READ, REMOTE_ADIV5_DEV_INDEX, REMOTE_ADIV5_AP_SEL, \
 			REMOTE_ADIV5_CSW, REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_COUNT, REMOTE_EOM, 0                   \
 	}
-/*
- * 3 leader bytes + 2 bytes for dev index + 2 bytes for AP select + 8 for CSW + 16 for the address
- * and 8 for the count and one trailer gives 40U
- */
-#define REMOTE_ADIV5_MEM_READ_LENGTH 40U
+/* 2 leader bytes and one trailer byte gives 3 bytes response overhead */
+#define REMOTE_ADIV5_MEM_READ_LENGTH 3U
 #define REMOTE_ADIV5_MEM_WRITE_STR                                                                      \
 	(char[])                                                                                            \
 	{                                                                                                   \
@@ -313,9 +313,86 @@
 	}
 /*
  * 3 leader bytes + 2 bytes for dev index + 2 bytes for AP select + 8 for CSW + 2 for the alignment +
- * 16 for the address and 8 for the count and one trailer gives 42U
+ * 16 for the address and 8 for the count and one trailer gives 42 bytes request overhead
  */
 #define REMOTE_ADIV5_MEM_WRITE_LENGTH 42U
+
+/* ADIv6 acceleration protocol elements */
+#define REMOTE_ADIV6_PACKET '6'
+
+#define REMOTE_ADIV6_AP_READ_STR                                                                      \
+	(char[])                                                                                          \
+	{                                                                                                 \
+		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_ADIV6_PACKET, REMOTE_AP_READ, REMOTE_ADIV5_DEV_INDEX, \
+			REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_ADDR16, REMOTE_EOM, 0                                   \
+	}
+#define REMOTE_ADIV6_AP_WRITE_STR                                                                      \
+	(char[])                                                                                           \
+	{                                                                                                  \
+		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_ADIV6_PACKET, REMOTE_AP_WRITE, REMOTE_ADIV5_DEV_INDEX, \
+			REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_ADDR16, REMOTE_ADIV5_DATA, REMOTE_EOM, 0                 \
+	}
+#define REMOTE_ADIV6_MEM_READ_STR                                                                         \
+	(char[])                                                                                              \
+	{                                                                                                     \
+		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_ADIV6_PACKET, REMOTE_MEM_READ, REMOTE_ADIV5_DEV_INDEX,    \
+			REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_CSW, REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_COUNT, REMOTE_EOM, 0 \
+	}
+/* 2 leader bytes and one trailer byte gives 3 bytes response overhead */
+#define REMOTE_ADIV6_MEM_READ_LENGTH 3U
+#define REMOTE_ADIV6_MEM_WRITE_STR                                                                                    \
+	(char[])                                                                                                          \
+	{                                                                                                                 \
+		REMOTE_SOM, REMOTE_ADIV5_PACKET, REMOTE_ADIV6_PACKET, REMOTE_MEM_WRITE, REMOTE_ADIV5_DEV_INDEX,               \
+			REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_CSW, REMOTE_ADIV5_ALIGNMENT, REMOTE_ADIV5_ADDR64, REMOTE_ADIV5_COUNT, 0 \
+	}
+/*
+ * 3 leader bytes + 2 bytes for dev index + 16 bytes for the DP resource bus AP base address + 8 for CSW +
+ * 2 for the alignment + 16 for the address and 8 for the count and one trailer gives 57 bytes request overhead
+ */
+#define REMOTE_ADIV6_MEM_WRITE_LENGTH 57U
+
+/* RISC-V acceleration protocol elements */
+#define REMOTE_RISCV_PACKET    'R'
+#define REMOTE_RISCV_PROTOCOLS 'P'
+#define REMOTE_RISCV_DMI_READ  'd'
+#define REMOTE_RISCV_DMI_WRITE 'D'
+
+#define REMOTE_RISCV_PROTOCOL    '%', 'c'
+#define REMOTE_RISCV_DEV_INDEX   REMOTE_UINT8
+#define REMOTE_RISCV_IDLE_CYCLES REMOTE_UINT8
+#define REMOTE_RISCV_ADDR_WIDTH  REMOTE_UINT8
+#define REMOTE_RISCV_ADDR32      REMOTE_UINT32
+#define REMOTE_RISCV_DATA        REMOTE_UINT32
+
+/* Supported RISC-V DTM protocols */
+#define REMOTE_RISCV_JTAG 'J'
+
+#define REMOTE_RISCV_PROTOCOLS_STR                                             \
+	(char[])                                                                   \
+	{                                                                          \
+		REMOTE_SOM, REMOTE_RISCV_PACKET, REMOTE_RISCV_PROTOCOLS, REMOTE_EOM, 0 \
+	}
+#define REMOTE_RISCV_INIT_STR                                                              \
+	(char[])                                                                               \
+	{                                                                                      \
+		REMOTE_SOM, REMOTE_RISCV_PACKET, REMOTE_INIT, REMOTE_RISCV_PROTOCOL, REMOTE_EOM, 0 \
+	}
+#define REMOTE_RISCV_DMI_READ_STR                                                                                 \
+	(char[])                                                                                                      \
+	{                                                                                                             \
+		REMOTE_SOM, REMOTE_RISCV_PACKET, REMOTE_RISCV_DMI_READ, REMOTE_RISCV_DEV_INDEX, REMOTE_RISCV_IDLE_CYCLES, \
+			REMOTE_RISCV_ADDR_WIDTH, REMOTE_RISCV_ADDR32, REMOTE_EOM, 0                                           \
+	}
+#define REMOTE_RISCV_DMI_WRITE_STR                                                                                 \
+	(char[])                                                                                                       \
+	{                                                                                                              \
+		REMOTE_SOM, REMOTE_RISCV_PACKET, REMOTE_RISCV_DMI_WRITE, REMOTE_RISCV_DEV_INDEX, REMOTE_RISCV_IDLE_CYCLES, \
+			REMOTE_RISCV_ADDR_WIDTH, REMOTE_RISCV_ADDR32, REMOTE_RISCV_DATA, REMOTE_EOM, 0                         \
+	}
+
+/* Remote protocol enabled RISC-V protocols bit values */
+#define REMOTE_RISCV_PROTOCOL_JTAG (1U << 0U)
 
 /* SPI protocol elements */
 #define REMOTE_SPI_PACKET      's'

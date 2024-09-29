@@ -8,6 +8,7 @@ ENABLE_ARTERY ?= 0
 ENABLE_CH579 ?= 0
 ENABLE_PUYA ?= 0
 ENABLE_XILINX ?= 0
+ENABLE_RISCV_ACCEL ?= 0
 
 SYS = $(shell $(CC) -dumpmachine)
 
@@ -36,9 +37,12 @@ CFLAGS += -DENABLE_DEBUG=0
 endif
 
 SRC =              \
+	adi.c          \
 	adiv5.c        \
 	adiv5_jtag.c   \
 	adiv5_swd.c    \
+	apollo3.c      \
+	adiv6.c        \
 	command.c      \
 	cortex.c       \
 	cortexm.c      \
@@ -72,7 +76,8 @@ SRC =              \
 	nrf91.c        \
 	nxpke04.c      \
 	remote.c       \
-	rp.c           \
+	rp2040.c       \
+	rp2350.c       \
 	sam3x.c        \
 	sam4l.c        \
 	samd.c         \
@@ -90,6 +95,7 @@ SRC =              \
 	stm32l0.c      \
 	stm32l4.c      \
 	stm32g0.c      \
+	stm32wb0.c     \
 	stm32_common.c \
 	renesas_ra.c   \
 	target.c       \
@@ -98,6 +104,12 @@ SRC =              \
 
 ifneq ($(PROBE_HOST), ctxLink)
 	SRC += gdb_if.c
+endif
+
+# Check if the old name for the SWO encoding setting has been used
+ifdef TRACESWO_PROTOCOL
+	$(warning the TRACESWO_PROTOCOL variable is deprecated, please use SWO_ENCODING instead)
+	SWO_ENCODING = $(TRACESWO_PROTOCOL)
 endif
 
 ifeq (,$(filter all_platforms,$(MAKECMDGOALS)))
@@ -120,24 +132,29 @@ SRC +=     \
 endif
 
 ifeq ($(ENABLE_CORTEXAR), 1)
-CFLAGS += -DENABLE_CORTEXAR
+CFLAGS += -DENABLE_CORTEXAR=1
 SRC +=           \
 	cortexar.c   \
 	renesas_rz.c
 
 ifeq ($(ENABLE_XILINX), 1)
-CFLAGS += -DENABLE_XILINX
+CFLAGS += -DENABLE_XILINX=1
 SRC +=         \
 	zynq7000.c
 endif
 endif
 
 ifeq ($(ENABLE_RISCV), 1)
-CFLAGS += -DENABLE_RISCV
+CFLAGS += -DENABLE_RISCV=1
 SRC +=               \
 	riscv32.c        \
 	riscv64.c        \
 	riscv_debug.c    \
+	riscv_adi_dtm.c  \
+	riscv_jtag_dtm.c
+else ifeq ($(ENABLE_RISCV_ACCEL), 1)
+CFLAGS == -DENABLE_RISCV_ACCEL=1
+SRC +=               \
 	riscv_jtag_dtm.c
 endif
 

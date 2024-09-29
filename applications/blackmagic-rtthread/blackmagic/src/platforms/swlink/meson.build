@@ -53,12 +53,22 @@ probe_swlink_link_args = [
 	'-Wl,-Ttext=0x8002000',
 ]
 
+trace_protocol = get_option('trace_protocol')
+probe_swlink_args += [f'-DSWO_ENCODING=@trace_protocol@']
+probe_swlink_dependencies = [platform_stm32_swo]
+if trace_protocol in ['1', '3']
+	probe_swlink_dependencies += platform_stm32_swo_manchester
+endif
+if trace_protocol in ['2', '3']
+	probe_swlink_dependencies += platform_stm32_swo_uart
+endif
+
 probe_host = declare_dependency(
 	include_directories: probe_swlink_includes,
 	sources: probe_swlink_sources,
 	compile_args: probe_swlink_args,
 	link_args: probe_swlink_common_link_args + probe_swlink_link_args,
-	dependencies: [platform_common, platform_stm32f1, fixme_platform_stm32_traceswoasync],
+	dependencies: [platform_common, platform_stm32f1, probe_swlink_dependencies],
 )
 
 probe_bootloader = declare_dependency(

@@ -47,7 +47,7 @@
 
 #ifdef PLATFORM_HAS_TRACESWO
 #include "serialno.h"
-#include "traceswo.h"
+#include "swo.h"
 #include "usb.h"
 #endif
 
@@ -68,7 +68,7 @@ static bool cmd_tdi_low_reset(target_s *t, int argc, const char **argv);
 static bool cmd_target_power(target_s *t, int argc, const char **argv);
 #endif
 #ifdef PLATFORM_HAS_TRACESWO
-static bool cmd_traceswo(target_s *t, int argc, const char **argv);
+static bool cmd_swo(target_s *t, int argc, const char **argv);
 #endif
 static bool cmd_heapinfo(target_s *t, int argc, const char **argv);
 #ifdef ENABLE_RTT
@@ -109,11 +109,14 @@ const command_s cmd_list[] = {
 		"MAXERR]]"},
 #endif
 #ifdef PLATFORM_HAS_TRACESWO
-#if defined TRACESWO_PROTOCOL && TRACESWO_PROTOCOL == 2
-	{"traceswo", cmd_traceswo, "Start trace capture, NRZ mode: [BAUDRATE] [decode [CHANNEL_NR ...]]"},
-#else
-	{"traceswo", cmd_traceswo, "Start trace capture, Manchester mode: [decode [CHANNEL_NR ...]]"},
+#if SWO_ENCODING == 1
+	{"swo", cmd_swo, "Start SWO capture, Manchester mode: <enable|disable> [decode [CHANNEL_NR ...]]"},
+#elif SWO_ENCODING == 2
+	{"swo", cmd_swo, "Start SWO capture, UART mode: <enable|disable> [BAUDRATE] [decode [CHANNEL_NR ...]]"},
+#elif SWO_ENCODING == 3
+	{"swo", cmd_swo, "Start SWO capture: <enable|disable> [manchester|uart] [BAUDRATE] [decode [CHANNEL_NR ...]]"},
 #endif
+	{"traceswo", cmd_swo, "Deprecated: use swo instead"},
 #endif
 	{"heapinfo", cmd_heapinfo, "Set semihosting heapinfo: HEAP_BASE HEAP_LIMIT STACK_BASE STACK_LIMIT"},
 #if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
@@ -124,6 +127,10 @@ const command_s cmd_list[] = {
 #endif
 	{NULL, NULL, NULL},
 };
+
+#ifdef PLATFORM_HAS_CUSTOM_COMMANDS
+extern const command_s platform_cmd_list[];
+#endif
 
 bool connect_assert_nrst;
 #if defined(PLATFORM_HAS_DEBUG) && PC_HOSTED == 0
@@ -160,6 +167,13 @@ int command_process(target_s *const t, char *const cmd_buffer)
 		if ((argc == 0) || !strncmp(argv[0], cmd->cmd, strlen(argv[0])))
 			return !cmd->handler(t, argc, argv);
 	}
+
+#ifdef PLATFORM_HAS_CUSTOM_COMMANDS
+	for (const command_s *cmd = platform_cmd_list; cmd->cmd; ++cmd) {
+		if (!strncmp(argv[0], cmd->cmd, strlen(argv[0])))
+			return !cmd->handler(t, argc, argv);
+	}
+#endif
 
 	if (!t)
 		return -1;
@@ -198,6 +212,11 @@ bool cmd_help(target_s *t, int argc, const char **argv)
 		gdb_out("General commands:\n");
 		for (const command_s *cmd = cmd_list; cmd->cmd; cmd++)
 			gdb_outf("\t%s -- %s\n", cmd->cmd, cmd->help);
+#ifdef PLATFORM_HAS_CUSTOM_COMMANDS
+		gdb_out("Platform commands:\n");
+		for (const command_s *cmd = platform_cmd_list; cmd->cmd; ++cmd)
+			gdb_outf("\t%s -- %s\n", cmd->cmd, cmd->help);
+#endif
 		if (!t)
 			return true;
 	}
@@ -587,55 +606,99 @@ static bool cmd_rtt(target_s *t, int argc, const char **argv)
 #endif
 
 #ifdef PLATFORM_HAS_TRACESWO
-static bool cmd_traceswo(target_s *t, int argc, const char **argv)
+static bool cmd_swo_enable(int argc, const char **argv)
 {
-	(void)t;
-#if TRACESWO_PROTOCOL == 2
-	uint32_t baudrate = SWO_DEFAULT_BAUD;
+	/* Set up which mode we're going to default to */
+#if SWO_ENCODING == 1
+	const swo_coding_e capture_mode = swo_manchester;
+#elif SWO_ENCODING == 2
+	const swo_coding_e capture_mode = swo_nrz_uart;
+#elif SWO_ENCODING == 3
+	swo_coding_e capture_mode = swo_none;
 #endif
-	uint32_t swo_channelmask = 0; /* swo decoding off */
-	uint8_t decode_arg = 1;
-#if TRACESWO_PROTOCOL == 2
-	/* argument: optional baud rate for async mode */
-	if (argc > 1 && argv[1][0] >= '0' && argv[1][0] <= '9') {
-		baudrate = strtoul(argv[1], NULL, 0);
-		if (baudrate == 0)
+	/* Set up the presumed baudrate for the stream */
+	uint32_t baudrate = SWO_DEFAULT_BAUD;
+	/*
+	 * Before we can enable SWO data recovery, potentially with decoding,
+	 * start with the assumption ITM decoding is off
+	 */
+	uint32_t itm_stream_mask = 0U;
+	uint8_t decode_arg = 1U;
+#if SWO_ENCODING == 3
+	/* Next, determine which decoding mode to use */
+	if (argc > decode_arg) {
+		const size_t arg_length = strlen(argv[decode_arg]);
+		if (!strncmp(argv[decode_arg], "manchester", arg_length))
+			capture_mode = swo_manchester;
+		if (!strncmp(argv[decode_arg], "uart", arg_length))
+			capture_mode = swo_nrz_uart;
+	}
+	/* If a mode was given, make sure the rest of the parser skips the mode verb */
+	if (capture_mode != swo_none)
+		++decode_arg;
+	/* Otherwise set a default mode up */
+	else
+		capture_mode = swo_nrz_uart;
+#endif
+#if SWO_ENCODING == 2 || SWO_ENCODING == 3
+	/* Handle the optional baud rate argument if present */
+	if (capture_mode == swo_nrz_uart && argc > decode_arg && argv[decode_arg][0] >= '0' && argv[decode_arg][0] <= '9') {
+		baudrate = strtoul(argv[decode_arg], NULL, 0);
+		if (baudrate == 0U)
 			baudrate = SWO_DEFAULT_BAUD;
-		decode_arg = 2;
+		++decode_arg;
 	}
 #endif
-	/* argument: 'decode' literal */
+	/* Check if `decode` has been given and if it has, enable ITM decoding */
 	if (argc > decode_arg && !strncmp(argv[decode_arg], "decode", strlen(argv[decode_arg]))) {
-		swo_channelmask = 0xffffffffU; /* decoding all channels */
-		/* arguments: channels to decode */
+		/* Check if there are specific ITM streams to enable and build a bitmask of them */
 		if (argc > decode_arg + 1) {
-			swo_channelmask = 0U;
-			for (size_t i = decode_arg + 1U; i < (size_t)argc; ++i) { /* create bitmask of channels to decode */
-				const uint32_t channel = strtoul(argv[i], NULL, 0);
-				if (channel < 32U)
-					swo_channelmask |= 1U << channel;
+			/* For each of the specified streams */
+			for (size_t i = decode_arg + 1U; i < (size_t)argc; ++i) {
+				/* Figure out which the next one is */
+				const uint32_t stream = strtoul(argv[i], NULL, 0);
+				/* If it's a valid ITM stream number, set it in the mask */
+				if (stream < 32U)
+					itm_stream_mask |= 1U << stream;
 			}
-		}
+		} else
+			/* Decode all ITM streams if non given */
+			itm_stream_mask = 0xffffffffU;
 	}
 
-#if TRACESWO_PROTOCOL == 2
-	gdb_outf("Baudrate: %lu ", baudrate);
-#endif
+	/* Now enable SWO data recovery */
+	swo_init(capture_mode, baudrate, itm_stream_mask);
+	/* And show the user what we've done - first the channel mask from MSb to LSb */
 	gdb_outf("Channel mask: ");
 	for (size_t i = 0; i < 32U; ++i) {
-		const uint32_t bit = (swo_channelmask >> (31U - i)) & 1U;
-		gdb_outf("%" PRIu32, bit);
+		const char bit = '0' + ((itm_stream_mask >> (31U - i)) & 1U);
+		gdb_outf("%c", bit);
 	}
 	gdb_outf("\n");
-
-#if TRACESWO_PROTOCOL == 2
-	traceswo_init(baudrate, swo_channelmask);
-#else
-	traceswo_init(swo_channelmask);
-#endif
-
-	gdb_outf("Trace enabled for BMP serial %s, USB EP %u\n", serial_no, TRACE_ENDPOINT);
+	/* Then the connection information for programs that are scraping BMD's output to know what to connect to */
+	gdb_outf("Trace enabled for BMP serial %s, USB EP %u\n", serial_no, SWO_ENDPOINT);
 	return true;
+}
+
+static bool cmd_swo_disable(void)
+{
+	swo_deinit(true);
+	gdb_out("Trace disabled\n");
+	return true;
+}
+
+static bool cmd_swo(target_s *t, int argc, const char **argv)
+{
+	(void)t;
+	bool enable_swo = false;
+	if (argc >= 2 && !parse_enable_or_disable(argv[1], &enable_swo)) {
+		gdb_out("Usage: traceswo <enable|disable> [2000000] [decode [0 1 3 31]]\n");
+		return false;
+	}
+
+	if (enable_swo)
+		return cmd_swo_enable(argc - 1, argv + 1);
+	return cmd_swo_disable();
 }
 #endif
 
@@ -643,10 +706,9 @@ static bool cmd_traceswo(target_s *t, int argc, const char **argv)
 static bool cmd_debug_bmp(target_s *t, int argc, const char **argv)
 {
 	(void)t;
-	if (argc == 2) {
-		if (!parse_enable_or_disable(argv[1], &debug_bmp))
-			return false;
-	} else if (argc > 2) {
+	if (argc == 2 && !parse_enable_or_disable(argv[1], &debug_bmp))
+		return false;
+	if (argc > 2) {
 		gdb_outf("usage: monitor debug [enable|disable]\n");
 		return false;
 	}
@@ -684,8 +746,8 @@ static bool cmd_heapinfo(target_s *t, int argc, const char **argv)
 		target_addr_t heap_limit = strtoul(argv[2], NULL, 16);
 		target_addr_t stack_base = strtoul(argv[3], NULL, 16);
 		target_addr_t stack_limit = strtoul(argv[4], NULL, 16);
-		gdb_outf("heap_base: %08" PRIx32 " heap_limit: %08" PRIx32 " stack_base: %08" PRIx32 " stack_limit: %08" PRIx32
-				 "\n",
+		gdb_outf("heap_base: %08" PRIx32 " heap_limit: %08" PRIx32 " stack_base: %08" PRIx32 " stack_limit: "
+				 "%08" PRIx32 "\n",
 			heap_base, heap_limit, stack_base, stack_limit);
 		target_set_heapinfo(t, heap_base, heap_limit, stack_base, stack_limit);
 	} else

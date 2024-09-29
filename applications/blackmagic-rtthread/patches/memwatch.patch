@@ -1,6 +1,6 @@
-commit 5082ccc3e5fb6a02d0d6c192163e00ccfb5f6553
+commit 2b003bae1a078e88307c8d7138fd8412c5aab998
 Author: Koen De Vleeschauwer <kdv@kdvelectronics.eu>
-Date:   Wed Apr 17 13:16:30 2024 +0200
+Date:   Sun Sep 29 11:07:31 2024 +0200
 
     memwatch
 
@@ -58,7 +58,7 @@ index 00000000..6140c0e5
 +#endif
 diff --git a/src/memwatch.c b/src/memwatch.c
 new file mode 100644
-index 00000000..5df1b62a
+index 00000000..0227b1ff
 --- /dev/null
 +++ b/src/memwatch.c
 @@ -0,0 +1,55 @@
@@ -111,17 +111,17 @@ index 00000000..5df1b62a
 +				break;
 +			}
 +			buf[sizeof(buf) - 1] = '\0';
-+			rtt_write(buf, len);
++			rtt_write(3, buf, len);
 +			memwatch_table[i].value = val.i;
 +		}
 +	}
 +	return;
 +}
 diff --git a/src/target/cortexm.c b/src/target/cortexm.c
-index fa6fe025..df4e4d70 100644
+index dac73e46..70912bf6 100644
 --- a/src/target/cortexm.c
 +++ b/src/target/cortexm.c
-@@ -41,15 +41,25 @@
+@@ -42,15 +42,25 @@
  #include "command.h"
  #include "gdb_packet.h"
  #include "semihosting.h"
@@ -147,7 +147,7 @@ index fa6fe025..df4e4d70 100644
  	{NULL, NULL, NULL},
  };
  
-@@ -1354,6 +1364,85 @@ static bool cortexm_vector_catch(target_s *target, int argc, const char **argv)
+@@ -1190,6 +1200,81 @@ static bool cortexm_vector_catch(target_s *target, int argc, const char **argv)
  	return true;
  }
  
@@ -178,11 +178,7 @@ index fa6fe025..df4e4d70 100644
 +				break;
 +			case 'f':
 +				fmt = MEMWATCH_FMT_FLOAT;
-+#if PC_HOSTED == 1
 +				precision = 6;
-+#else
-+				precision = -1;
-+#endif
 +				ch = argv[i][2];
 +				if ((ch >= '0') && (ch <= '9'))
 +					precision = ch - '0';

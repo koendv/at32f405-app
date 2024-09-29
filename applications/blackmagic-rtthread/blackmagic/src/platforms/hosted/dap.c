@@ -52,6 +52,7 @@
 #define SWD_DP_W_WCR       0x04U // When CTRLSEL == 1
 #define SWD_DP_R_RESEND    0x08U
 #define SWD_DP_W_SELECT    0x08U
+#define SWD_DP_W_SELECT1   0x04U
 #define SWD_DP_R_RDBUFF    0x0cU
 
 #define SWD_DP_REG(reg, apsel) ((reg) | ((apsel) << 24U))
@@ -261,7 +262,7 @@ void dap_write_reg(adiv5_debug_port_s *target_dp, const uint8_t reg, const uint3
 	} while (target_dp->fault == DAP_TRANSFER_WAIT);
 }
 
-bool dap_read_block(
+bool dap_mem_read_block(
 	adiv5_access_port_s *const target_ap, void *dest, target_addr64_t src, const size_t len, const align_e align)
 {
 	const size_t blocks = len >> MIN(align, 2U);
@@ -282,7 +283,7 @@ bool dap_read_block(
 	return true;
 }
 
-bool dap_write_block(
+bool dap_mem_write_block(
 	adiv5_access_port_s *const target_ap, target_addr64_t dest, const void *src, const size_t len, const align_e align)
 {
 	const size_t blocks = len >> MAX(align, 2U);
@@ -303,7 +304,7 @@ bool dap_write_block(
 	return result;
 }
 
-static size_t mem_access_setup(const adiv5_access_port_s *const target_ap,
+static size_t dap_adiv5_mem_access_build(const adiv5_access_port_s *const target_ap,
 	dap_transfer_request_s *const transfer_requests, const target_addr64_t addr, const align_e align)
 {
 	uint32_t csw = target_ap->csw | ADIV5_AP_CSW_ADDRINC_SINGLE;
@@ -339,11 +340,11 @@ static size_t mem_access_setup(const adiv5_access_port_s *const target_ap,
 	}
 }
 
-void dap_ap_mem_access_setup(adiv5_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
+void dap_adiv5_mem_access_setup(adiv5_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
 {
 	/* Start by setting up the transfer and attempting it */
 	dap_transfer_request_s requests[4];
-	const size_t requests_count = mem_access_setup(target_ap, requests, addr, align);
+	const size_t requests_count = dap_adiv5_mem_access_build(target_ap, requests, addr, align);
 	adiv5_debug_port_s *const target_dp = target_ap->dp;
 	const bool result = perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
 	/* If it didn't go well, say something and abort */
@@ -356,44 +357,147 @@ void dap_ap_mem_access_setup(adiv5_access_port_s *const target_ap, const target_
 	}
 }
 
-uint32_t dap_ap_read(adiv5_access_port_s *const target_ap, const uint16_t addr)
+static size_t dap_adiv6_mem_access_build(const adiv6_access_port_s *const target_ap,
+	dap_transfer_request_s *const transfer_requests, const target_addr64_t addr, const align_e align)
+{
+	uint32_t csw = target_ap->base.csw | ADIV5_AP_CSW_ADDRINC_SINGLE;
+	switch (align) {
+	case ALIGN_8BIT:
+		csw |= ADIV5_AP_CSW_SIZE_BYTE;
+		break;
+	case ALIGN_16BIT:
+		csw |= ADIV5_AP_CSW_SIZE_HALFWORD;
+		break;
+	case ALIGN_64BIT:
+	case ALIGN_32BIT:
+		csw |= ADIV5_AP_CSW_SIZE_WORD;
+		break;
+	}
+	/* Select the AP base address via SELECT1 */
+	transfer_requests[0].request = SWD_DP_W_SELECT;
+	transfer_requests[0].data = ADIV5_DP_BANK5;
+	transfer_requests[1].request = SWD_DP_W_SELECT1;
+	transfer_requests[1].data = (uint32_t)(target_ap->ap_address >> 32U);
+	/* Select the bank for the CSW register */
+	transfer_requests[2].request = SWD_DP_W_SELECT;
+	transfer_requests[2].data = (uint32_t)target_ap->ap_address | (ADIV5_AP_CSW & ADIV6_AP_BANK_MASK);
+	/* Then write the CSW register to the new value */
+	transfer_requests[3].request = SWD_AP_CSW;
+	transfer_requests[3].data = csw;
+	/* Finally write the TAR register to its new value */
+	if (target_ap->base.flags & ADIV5_AP_FLAGS_64BIT) {
+		transfer_requests[4].request = SWD_AP_TAR_HIGH;
+		transfer_requests[4].data = (uint32_t)(addr >> 32U);
+		transfer_requests[5].request = SWD_AP_TAR_LOW;
+		transfer_requests[5].data = (uint32_t)addr;
+		return 6U;
+	} else {
+		transfer_requests[4].request = SWD_AP_TAR_LOW;
+		transfer_requests[4].data = (uint32_t)addr;
+		return 5U;
+	}
+}
+
+void dap_adiv6_mem_access_setup(adiv6_access_port_s *const target_ap, const target_addr64_t addr, const align_e align)
+{
+	/* Start by setting up the transfer and attempting it */
+	dap_transfer_request_s requests[6];
+	const size_t requests_count = dap_adiv6_mem_access_build(target_ap, requests, addr, align);
+	adiv5_debug_port_s *const target_dp = target_ap->base.dp;
+	const bool result = perform_dap_transfer_recoverable(target_dp, requests, requests_count, NULL, 0U);
+	/* If it didn't go well, say something and abort */
+	if (!result) {
+		if (target_dp->fault != DAP_TRANSFER_NO_RESPONSE)
+			DEBUG_ERROR("Transport error (%u), aborting\n", target_dp->fault);
+		else
+			DEBUG_ERROR("Transaction unrecoverably failed\n");
+		exit(-1);
+	}
+}
+
+uint32_t dap_adiv5_ap_read(adiv5_access_port_s *const target_ap, const uint16_t addr)
 {
 	dap_transfer_request_s requests[2];
-	DEBUG_PROBE("dap_ap_read addr %x\n", addr);
+	DEBUG_PROBE("%s addr %x\n", __func__, addr);
 	/* Select the bank for the register */
 	requests[0].request = SWD_DP_W_SELECT;
 	requests[0].data = SWD_DP_REG(addr & 0xf0U, target_ap->apsel);
 	/* Read the register */
-	requests[1].request = (addr & 0x0cU) | DAP_TRANSFER_RnW | (addr & 0x100U ? DAP_TRANSFER_APnDP : 0);
+	requests[1].request = (addr & 0x0cU) | DAP_TRANSFER_RnW | (addr & ADIV5_APnDP ? DAP_TRANSFER_APnDP : 0);
 	uint32_t result = 0;
 	adiv5_debug_port_s *const target_dp = target_ap->dp;
 	if (!perform_dap_transfer(target_dp, requests, 2U, &result, 1U)) {
-		DEBUG_ERROR("dap_ap_read failed (fault = %u)\n", target_dp->fault);
+		DEBUG_ERROR("%s failed (fault = %u)\n", __func__, target_dp->fault);
 		return 0U;
 	}
 	return result;
 }
 
-void dap_ap_write(adiv5_access_port_s *const target_ap, const uint16_t addr, const uint32_t value)
+void dap_adiv5_ap_write(adiv5_access_port_s *const target_ap, const uint16_t addr, const uint32_t value)
 {
 	dap_transfer_request_s requests[2];
-	DEBUG_PROBE("dap_ap_write addr %04x value %08" PRIx32 "\n", addr, value);
+	DEBUG_PROBE("%s addr %04x value %08" PRIx32 "\n", __func__, addr, value);
 	/* Select the bank for the register */
 	requests[0].request = SWD_DP_W_SELECT;
 	requests[0].data = SWD_DP_REG(addr & 0xf0U, target_ap->apsel);
 	/* Write the register */
-	requests[1].request = (addr & 0x0cU) | (addr & 0x100U ? DAP_TRANSFER_APnDP : 0);
+	requests[1].request = (addr & 0x0cU) | (addr & ADIV5_APnDP ? DAP_TRANSFER_APnDP : 0);
 	requests[1].data = value;
 	adiv5_debug_port_s *const target_dp = target_ap->dp;
 	if (!perform_dap_transfer(target_dp, requests, 2U, NULL, 0U))
-		DEBUG_ERROR("dap_ap_write failed (fault = %u)\n", target_dp->fault);
+		DEBUG_ERROR("%s failed (fault = %u)\n", __func__, target_dp->fault);
 }
 
-void dap_read_single(
+uint32_t dap_adiv6_ap_read(adiv5_access_port_s *const base_ap, const uint16_t addr)
+{
+	adiv6_access_port_s *const target_ap = (adiv6_access_port_s *)base_ap;
+	dap_transfer_request_s requests[4];
+	DEBUG_PROBE("%s addr %x\n", __func__, addr);
+	/* Set SELECT1 in the DP up first */
+	requests[0].request = SWD_DP_W_SELECT;
+	requests[0].data = ADIV5_DP_BANK5;
+	requests[1].request = SWD_DP_W_SELECT1;
+	requests[1].data = (uint32_t)(target_ap->ap_address >> 32U);
+	/* Now set up SELECT in the DP */
+	requests[2].request = SWD_DP_W_SELECT;
+	requests[2].data = (uint32_t)target_ap->ap_address | (addr & ADIV6_AP_BANK_MASK);
+	/* Read the register */
+	requests[3].request = (addr & 0x0cU) | DAP_TRANSFER_RnW | (addr & ADIV5_APnDP ? DAP_TRANSFER_APnDP : 0);
+	uint32_t result = 0;
+	adiv5_debug_port_s *const target_dp = base_ap->dp;
+	if (!perform_dap_transfer(target_dp, requests, 4U, &result, 1U)) {
+		DEBUG_ERROR("%s failed (fault = %u)\n", __func__, target_dp->fault);
+		return 0U;
+	}
+	return result;
+}
+
+void dap_adiv6_ap_write(adiv5_access_port_s *const base_ap, const uint16_t addr, const uint32_t value)
+{
+	adiv6_access_port_s *const target_ap = (adiv6_access_port_s *)base_ap;
+	dap_transfer_request_s requests[4];
+	DEBUG_PROBE("%s addr %04x value %08" PRIx32 "\n", __func__, addr, value);
+	/* Set SELECT1 in the DP up first */
+	requests[0].request = SWD_DP_W_SELECT;
+	requests[0].data = ADIV5_DP_BANK5;
+	requests[1].request = SWD_DP_W_SELECT1;
+	requests[1].data = (uint32_t)(target_ap->ap_address >> 32U);
+	/* Now set up SELECT in the DP */
+	requests[2].request = SWD_DP_W_SELECT;
+	requests[2].data = (uint32_t)target_ap->ap_address | (addr & ADIV6_AP_BANK_MASK);
+	/* Write the register */
+	requests[3].request = (addr & 0x0cU) | (addr & ADIV5_APnDP ? DAP_TRANSFER_APnDP : 0);
+	requests[3].data = value;
+	adiv5_debug_port_s *const target_dp = base_ap->dp;
+	if (!perform_dap_transfer(target_dp, requests, 4U, NULL, 0U))
+		DEBUG_ERROR("%s failed (fault = %u)\n", __func__, target_dp->fault);
+}
+
+void dap_adiv5_mem_read_single(
 	adiv5_access_port_s *const target_ap, void *const dest, const target_addr64_t src, const align_e align)
 {
 	dap_transfer_request_s requests[5];
-	const size_t requests_count = mem_access_setup(target_ap, requests, src, align);
+	const size_t requests_count = dap_adiv5_mem_access_build(target_ap, requests, src, align);
 	requests[requests_count].request = SWD_AP_DRW | DAP_TRANSFER_RnW;
 	uint32_t result;
 	adiv5_debug_port_s *target_dp = target_ap->dp;
@@ -406,15 +510,45 @@ void dap_read_single(
 	adiv5_unpack_data(dest, src, result, align);
 }
 
-void dap_write_single(
+void dap_adiv5_mem_write_single(
 	adiv5_access_port_s *const target_ap, const target_addr64_t dest, const void *const src, const align_e align)
 {
 	dap_transfer_request_s requests[5];
-	const size_t requests_count = mem_access_setup(target_ap, requests, dest, align);
+	const size_t requests_count = dap_adiv5_mem_access_build(target_ap, requests, dest, align);
 	requests[requests_count].request = SWD_AP_DRW;
 	/* Pack data into correct data lane */
 	adiv5_pack_data(dest, src, &requests[requests_count].data, align);
 	adiv5_debug_port_s *target_dp = target_ap->dp;
+	if (!perform_dap_transfer_recoverable(target_dp, requests, requests_count + 1U, NULL, 0U))
+		DEBUG_ERROR("dap_write_single failed (fault = %u)\n", target_dp->fault);
+}
+
+void dap_adiv6_mem_read_single(
+	adiv6_access_port_s *const target_ap, void *const dest, const target_addr64_t src, const align_e align)
+{
+	dap_transfer_request_s requests[7];
+	const size_t requests_count = dap_adiv6_mem_access_build(target_ap, requests, src, align);
+	requests[requests_count].request = SWD_AP_DRW | DAP_TRANSFER_RnW;
+	uint32_t result;
+	adiv5_debug_port_s *target_dp = target_ap->base.dp;
+	if (!perform_dap_transfer_recoverable(target_dp, requests, requests_count + 1U, &result, 1U)) {
+		DEBUG_ERROR("dap_read_single failed (fault = %u)\n", target_dp->fault);
+		memset(dest, 0, 1U << align);
+		return;
+	}
+	/* Pull out the data. AP_DRW access implies an RDBUFF in CMSIS-DAP, so this is safe */
+	adiv5_unpack_data(dest, src, result, align);
+}
+
+void dap_adiv6_mem_write_single(
+	adiv6_access_port_s *const target_ap, const target_addr64_t dest, const void *const src, const align_e align)
+{
+	dap_transfer_request_s requests[7];
+	const size_t requests_count = dap_adiv6_mem_access_build(target_ap, requests, dest, align);
+	requests[requests_count].request = SWD_AP_DRW;
+	/* Pack data into correct data lane */
+	adiv5_pack_data(dest, src, &requests[requests_count].data, align);
+	adiv5_debug_port_s *target_dp = target_ap->base.dp;
 	if (!perform_dap_transfer_recoverable(target_dp, requests, requests_count + 1U, NULL, 0U))
 		DEBUG_ERROR("dap_write_single failed (fault = %u)\n", target_dp->fault);
 }

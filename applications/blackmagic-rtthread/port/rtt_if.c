@@ -42,7 +42,7 @@
 */
 
 /* rtt host to target: read one character */
-int32_t rtt_getchar()
+int32_t rtt_getchar(const uint32_t channel)
 {
 	char ch;
 	// XXXif (rt_mq_recv(cdc1_rx_mq, &ch, 1, 0) == 1)
@@ -51,14 +51,14 @@ int32_t rtt_getchar()
 }
 
 /* rtt host to target: true if no characters available for reading */
-bool rtt_nodata()
+bool rtt_nodata(const uint32_t channel)
 {
 	// return (cdc1_rx_mq->entry == 0);
 	return true;
 }
 
 /* rtt target to host: write string */
-uint32_t rtt_write(const char *buf, uint32_t len)
+uint32_t rtt_write(const uint32_t channel, const char *buf, uint32_t len)
 {
 	cdc1_acm_data_send((uint8_t *)buf, len);
 	return len;

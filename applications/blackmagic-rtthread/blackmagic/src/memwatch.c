@@ -47,7 +47,7 @@ void poll_memwatch(target_s *cur_target)
 				break;
 			}
 			buf[sizeof(buf) - 1] = '\0';
-			rtt_write(buf, len);
+			rtt_write(3, buf, len);
 			memwatch_table[i].value = val.i;
 		}
 	}

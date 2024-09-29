@@ -339,35 +339,16 @@ void gdb_putpacket_f(const char *const fmt, ...)
 	va_end(ap);
 }
 
-// faster, no mallocs
-void gdb_outn(const char *const buf, const size_t buf_len)
-{
-	const char hexdigit[] = "0123456789ABCDEF";
-	size_t tries = 0;
-	do {
-		DEBUG_GDB("%s: ", __func__);
-		gdb_if_putchar(GDB_PACKET_START, 0);
-		gdb_if_putchar('O', 0);
-		uint8_t csum = 'O';
-		for (size_t i = 0; i < buf_len; ++i) {
-			uint8_t c = buf[i];
-			uint8_t upperdigit = hexdigit[c >> 4U];
-			gdb_if_putchar(upperdigit, 0);
-			csum += upperdigit;
-			uint8_t lowerdigit = hexdigit[c & 0xfU];
-			gdb_if_putchar(lowerdigit, 0);
-			csum += lowerdigit;
-		}
-		gdb_if_putchar(GDB_PACKET_END, 0);
-		gdb_if_putchar(hexdigit[csum >> 4U], 0);
-		gdb_if_putchar(hexdigit[csum & 0xfU], 1);
-		DEBUG_GDB("\n");
-	} while (!noackmode && gdb_if_getchar_to(2000) != GDB_PACKET_ACK && tries++ < 3U);
-}
-
 void gdb_out(const char *const buf)
 {
-	gdb_outn(buf, strlen(buf));
+	const size_t buf_len = strlen(buf);
+	char *hexdata = calloc(1, 2U * buf_len + 1U);
+	if (!hexdata)
+		return;
+
+	hexify(hexdata, buf, buf_len);
+	gdb_putpacket2("O", 1, hexdata, 2U * buf_len);
+	free(hexdata);
 }
 
 void gdb_voutf(const char *const fmt, va_list ap)

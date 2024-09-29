@@ -58,12 +58,22 @@ probe_stlinkv3_link_args = [
 	f'-Wl,-Ttext=@probe_stlinkv3_load_address@',
 ]
 
+trace_protocol = get_option('trace_protocol')
+if trace_protocol == '3'
+	trace_protocol = '2'
+endif
+if trace_protocol == '2'
+	probe_stlinkv3_dependencies = [platform_stm32_swo, platform_stm32_swo_uart]
+else
+	error('Unsupported SWO protocol requested')
+endif
+
 probe_host = declare_dependency(
 	include_directories: probe_stlinkv3_includes,
 	sources: probe_stlinkv3_sources,
 	compile_args: probe_stlinkv3_args,
 	link_args: probe_stlinkv3_common_link_args + probe_stlinkv3_link_args,
-	dependencies: [platform_common, platform_stm32f7, fixme_platform_stm32f7_traceswoasync],
+	dependencies: [platform_common, platform_stm32f7, probe_stlinkv3_dependencies],
 )
 
 probe_bootloader = declare_dependency(

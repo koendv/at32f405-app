@@ -89,7 +89,26 @@ static bool at32f43_mass_erase(target_s *target);
 #define AT32F43x_2K_OB_COUNT 256U
 #define AT32F43x_4K_OB_COUNT 2048U
 
-#define DBGMCU_IDCODE 0xe0042000U
+/*
+ * refman: DEBUG has 5 registers, of which CTRL, APB1_PAUSE, APB2_PAUSE are
+ * "asynchronously reset by POR Reset (not reset by system reset). It can be written by the debugger under reset."
+ * Note that it has no TRACE_IOEN and SWO is controlled by GPIO IOMUX (AF) instead.
+ */
+#define AT32F43x_DBGMCU_BASE       0xe0042000U
+#define AT32F43x_DBGMCU_IDCODE     (AT32F43x_DBGMCU_BASE + 0x00U)
+#define AT32F43x_DBGMCU_CTRL       (AT32F43x_DBGMCU_BASE + 0x04U)
+#define AT32F43x_DBGMCU_APB1_PAUSE (AT32F43x_DBGMCU_BASE + 0x08U)
+#define AT32F43x_DBGMCU_APB2_PAUSE (AT32F43x_DBGMCU_BASE + 0x0cU)
+#define AT32F43x_DBGMCU_SER_ID     (AT32F43x_DBGMCU_BASE + 0x20U)
+
+#define AT32F43x_DBGMCU_CTRL_SLEEP_DEBUG     (1U << 0U)
+#define AT32F43x_DBGMCU_CTRL_DEEPSLEEP_DEBUG (1U << 1U)
+#define AT32F43x_DBGMCU_CTRL_STANDBY_DEBUG   (1U << 2U)
+#define AT32F43x_DBGMCU_CTRL_SLEEP_MASK \
+	(AT32F43x_DBGMCU_CTRL_SLEEP_DEBUG | AT32F43x_DBGMCU_CTRL_DEEPSLEEP_DEBUG | AT32F43x_DBGMCU_CTRL_STANDBY_DEBUG)
+
+#define AT32F43x_DBGMCU_APB1_PAUSE_WWDT (1U << 11U)
+#define AT32F43x_DBGMCU_APB1_PAUSE_WDT  (1U << 12U)
 
 #define AT32F4x_IDCODE_SERIES_MASK 0xfffff000U
 #define AT32F4x_IDCODE_PART_MASK   0x00000fffU
@@ -129,6 +148,45 @@ static void at32f43_add_flash(target_s *const target, const target_addr_t addr, 
 	flash->bank_split = bank_split;
 	flash->bank_reg_offset = bank_reg_offset;
 	target_add_flash(target, target_flash);
+}
+
+static void at32f43_configure_dbgmcu(target_s *target)
+{
+	/*
+	 * Enable sleep state emulation (clocks fed by HICK)
+	 * and make both watchdogs pause during core halts so that they
+	 * don't issue extra resets when we're doing e.g. flash reprogramming
+	 */
+	const uint32_t dbgmcu_ctrl = target_mem32_read32(target, AT32F43x_DBGMCU_CTRL);
+	if ((dbgmcu_ctrl & AT32F43x_DBGMCU_CTRL_SLEEP_MASK) != AT32F43x_DBGMCU_CTRL_SLEEP_MASK)
+		target_mem32_write32(target, AT32F43x_DBGMCU_CTRL,
+			dbgmcu_ctrl | AT32F43x_DBGMCU_CTRL_SLEEP_DEBUG | AT32F43x_DBGMCU_CTRL_DEEPSLEEP_DEBUG |
+				AT32F43x_DBGMCU_CTRL_STANDBY_DEBUG);
+
+	const uint32_t dbgmcu_apb1_pause_mask = AT32F43x_DBGMCU_APB1_PAUSE_WWDT | AT32F43x_DBGMCU_APB1_PAUSE_WDT;
+	const uint32_t dbgmcu_apb1_pause = target_mem32_read32(target, AT32F43x_DBGMCU_APB1_PAUSE);
+	if ((dbgmcu_apb1_pause & dbgmcu_apb1_pause_mask) != dbgmcu_apb1_pause_mask)
+		target_mem32_write32(target, AT32F43x_DBGMCU_APB1_PAUSE, dbgmcu_apb1_pause | dbgmcu_apb1_pause_mask);
+}
+
+static bool at32f43_attach(target_s *target)
+{
+	if (!cortexm_attach(target))
+		return false;
+
+	at32f43_configure_dbgmcu(target);
+	return true;
+}
+
+static void at32f43_detach(target_s *target)
+{
+	const uint32_t dbgmcu_ctrl = target_mem32_read32(target, AT32F43x_DBGMCU_CTRL);
+	const uint32_t dbgmcu_apb1_pause = target_mem32_read32(target, AT32F43x_DBGMCU_APB1_PAUSE);
+	target_mem32_write32(target, AT32F43x_DBGMCU_CTRL, dbgmcu_ctrl & ~AT32F43x_DBGMCU_CTRL_SLEEP_MASK);
+	target_mem32_write32(target, AT32F43x_DBGMCU_APB1_PAUSE,
+		dbgmcu_apb1_pause & ~(AT32F43x_DBGMCU_APB1_PAUSE_WWDT | AT32F43x_DBGMCU_APB1_PAUSE_WDT));
+
+	cortexm_detach(target);
 }
 
 static bool at32f43_detect(target_s *target, const uint16_t part_id)
@@ -226,6 +284,10 @@ static bool at32f43_detect(target_s *target, const uint16_t part_id)
 	target->driver = "AT32F435";
 	target->mass_erase = at32f43_mass_erase;
 	target_add_commands(target, at32f43_cmd_list, target->driver);
+	target->attach = at32f43_attach;
+	target->detach = at32f43_detach;
+
+	at32f43_configure_dbgmcu(target);
 	return true;
 }
 
@@ -283,7 +345,7 @@ bool at32f43x_probe(target_s *target)
 		return false;
 
 	// Artery chips use the complete idcode word for identification
-	const uint32_t idcode = target_mem32_read32(target, DBGMCU_IDCODE);
+	const uint32_t idcode = target_mem32_read32(target, AT32F43x_DBGMCU_IDCODE);
 	const uint32_t series = idcode & AT32F4x_IDCODE_SERIES_MASK;
 	const uint16_t part_id = idcode & AT32F4x_IDCODE_PART_MASK;
 
@@ -291,7 +353,6 @@ bool at32f43x_probe(target_s *target)
 		return at32f43_detect(target, part_id);
 	if (series == AT32F405_SERIES_256 || series == AT32F405_SERIES_128)
 		return at32f405_detect(target, part_id);
-
 	return false;
 }
 

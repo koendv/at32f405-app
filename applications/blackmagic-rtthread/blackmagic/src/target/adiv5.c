@@ -1,10 +1,10 @@
 /*
  * This file is part of the Black Magic Debug project.
  *
- * Copyright (C) 2015  Black Sphere Technologies Ltd.
+ * Copyright (C) 2015 Black Sphere Technologies Ltd.
  * Written by Gareth McMullin <gareth@blacksphere.co.nz>
- * Copyright (C) 2018-2021 Uwe Bonnes (bon@elektron.ikp.physik.tu-darmstadt.de)
- * Copyright (C) 2022-2023 1BitSquared <info@1bitsquared.com>
+ * Copyright (C) 2018-2021 Uwe Bonnes <bon@elektron.ikp.physik.tu-darmstadt.de>
+ * Copyright (C) 2022-2024 1BitSquared <info@1bitsquared.com>
  * Modified by Rachel Mant <git@dragonmux.network>
  *
  * This program is free software: you can redistribute it and/or modify
@@ -25,14 +25,17 @@
  * This file implements transport generic ADIv5 functions.
  *
  * See the following ARM Reference Documents:
- * - ARM Debug Interface v5 Architecture Specification, ARM IHI 0031E
+ * ARM Debug Interface v5 Architecture Specification, IHI0031 ver. g
+ * - https://developer.arm.com/documentation/ihi0031/latest/
  */
+
 #include "general.h"
 #include "target.h"
-#include "target_internal.h"
 #include "target_probe.h"
 #include "jep106.h"
+#include "adi.h"
 #include "adiv5.h"
+#include "adiv6.h"
 #include "cortexm.h"
 #include "cortex_internal.h"
 #include "exception.h"
@@ -52,292 +55,13 @@
  */
 #define ARM_AP_TYPE_AHB3 1U
 
-/* ROM table CIDR values */
-#define CIDR0_OFFSET 0xff0U /* DBGCID0 */
-#define CIDR1_OFFSET 0xff4U /* DBGCID1 */
-#define CIDR2_OFFSET 0xff8U /* DBGCID2 */
-#define CIDR3_OFFSET 0xffcU /* DBGCID3 */
-
-/*
- * Component class ID register can be broken down into the following logical
- * interpretation of the 32bit value consisting of the least significant bytes
- * of the 4 CID registers:
- * |7   ID3 reg   0|7   ID2 reg   0|7   ID1 reg   0|7   ID0 reg   0|
- * |1|0|1|1|0|0|0|1|0|0|0|0|0|1|0|1| | | | |0|0|0|0|0|0|0|0|1|1|0|1|
- * |31           24|23           16|15   12|11     |              0|
- * \_______________ ______________/\___ __/\___________ ___________/
- *                 V                   V               V
- *             Preamble            Component       Preamble
- *                                   Class
- * \_______________________________ _______________________________/
- *                                 V
- *                           Component ID
- */
-#define CID_PREAMBLE    UINT32_C(0xb105000d)
-#define CID_CLASS_MASK  UINT32_C(0x0000f000)
-#define CID_CLASS_SHIFT 12U
-
-/* The following enum is based on the Component Class value table 13-3 of the ADIv5 specification. */
-typedef enum cid_class {
-	cidc_gvc = 0x0,     /* Generic verification component*/
-	cidc_romtab = 0x1,  /* ROM Table, std. layout (ADIv5 Chapter 14) */
-	/* 0x2 - 0x8 */     /* Reserved */
-	cidc_dc = 0x9,      /* Debug component, std. layout (CoreSight Arch. Spec.) */
-	/* 0xa */           /* Reserved */
-	cidc_ptb = 0xb,     /* Peripheral Test Block (PTB) */
-	/* 0xc */           /* Reserved */
-	cidc_dess = 0xd,    /* OptimoDE Data Engine SubSystem (DESS) component */
-	cidc_gipc = 0xe,    /* Generic IP Component */
-	cidc_sys = 0xf,     /* CoreLink, PrimeCell, or other system component with no standard register layout */
-	cidc_unknown = 0x10 /* Not a valid component class */
-} cid_class_e;
-
-#define PIDR0_OFFSET 0xfe0U /* DBGPID0 */
-#define PIDR1_OFFSET 0xfe4U /* DBGPID1 */
-#define PIDR2_OFFSET 0xfe8U /* DBGPID2 */
-#define PIDR3_OFFSET 0xfecU /* DBGPID3 */
-#define PIDR4_OFFSET 0xfd0U /* DBGPID4 */
-#define PIDR5_OFFSET 0xfd4U /* DBGPID5 (Reserved) */
-#define PIDR6_OFFSET 0xfd8U /* DBGPID6 (Reserved) */
-#define PIDR7_OFFSET 0xfdcU /* DBGPID7 (Reserved) */
-
-#define PIDR_JEP106_CONT_OFFSET 32U                                         /*JEP-106 Continuation Code offset */
-#define PIDR_JEP106_CONT_MASK   (UINT64_C(0xf) << PIDR_JEP106_CONT_OFFSET)  /*JEP-106 Continuation Code mask */
-#define PIDR_REV_OFFSET         20U                                         /* Revision bits offset */
-#define PIDR_REV_MASK           (UINT64_C(0xfff) << PIDR_REV_OFFSET)        /* Revision bits mask */
-#define PIDR_JEP106_USED_OFFSET 19U                                         /* JEP-106 code used flag offset */
-#define PIDR_JEP106_USED        (UINT64_C(1) << PIDR_JEP106_USED_OFFSET)    /* JEP-106 code used flag */
-#define PIDR_JEP106_CODE_OFFSET 12U                                         /* JEP-106 code offset */
-#define PIDR_JEP106_CODE_MASK   (UINT64_C(0x7f) << PIDR_JEP106_CODE_OFFSET) /* JEP-106 code mask */
-#define PIDR_PN_MASK            UINT64_C(0xfff)                             /* Part number */
-
-#define DEVTYPE_OFFSET 0xfccU /* CoreSight Device Type Register */
-#define DEVARCH_OFFSET 0xfbcU /* CoreSight Device Architecture Register */
-
-#define DEVTYPE_MASK        0x000000ffU
-#define DEVARCH_PRESENT     (1U << 20U)
-#define DEVARCH_ARCHID_MASK 0x0000ffffU
-
-typedef enum arm_arch {
-	aa_nosupport,
-	aa_cortexm,
-	aa_cortexa,
-	aa_cortexr,
-	aa_end
-} arm_arch_e;
-
-#if ENABLE_DEBUG == 1
-#define ARM_COMPONENT_STR(...) __VA_ARGS__
-#else
-#define ARM_COMPONENT_STR(...)
-#endif
-
-/*
- * The part number list was adopted from OpenOCD:
- * https://sourceforge.net/p/openocd/code/ci/406f4/tree/src/target/arm_adi_v5.c#l932
- *
- * The product ID register consists of several parts. For a full description
- * refer to ARM Debug Interface v5 Architecture Specification. Based on the
- * document the pidr is 64 bit long and has the following interpratiation:
- * |7   ID7 reg   0|7   ID6 reg   0|7   ID5 reg   0|7   ID4 reg   0|
- * |0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0|0| | | | | | | | |
- * |63           56|55           48|47           40|39   36|35   32|
- * \_______________________ ______________________/\___ __/\___ ___/
- *                         V                           V       V
- *                    Reserved, RAZ                   4KB      |
- *                                                   count     |
- *                                                          JEP-106
- *                                                     Continuation Code (only valid for JEP-106 codes)
- *
- * |7   ID3 reg   0|7   ID2 reg   0|7   ID1 reg   0|7   ID0 reg   0|
- * | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | | |
- * |31   28|27   24|23   20|||18   |     12|11     |              0|
- * \___ __/\__ ___/\___ __/ |\______ _____/\___________ ___________/
- *     V      V        V    |       V                  V
- *  RevAnd    |    Revision |  JEP-106 ID         Part number
- *            |             |  (no parity)
- *        Customer          19
- *        modified          `- JEP-106 code is used
- *
- * only a subset of Part numbers are listed,
- * the ones that have ARM as the designer code.
- *
- * To properly identify ADIv6 CoreSight components, two additional fields,
- * DEVTYPE and ARCHID are read.
- * The dev_type and arch_id values in the table below were found in the
- * corresponding logic in pyOCD:
- * https://github.com/mbedmicro/pyOCD/blob/master/pyocd/coresight/component_ids.py
- *
- * Additional reference on the DEVTYPE and DEVARCH registers can be found in the
- * ARM CoreSight Architecture Specification v3.0, sections B2.3.4 and B2.3.8.
- */
-static const struct {
-	uint16_t part_number;
-	uint8_t dev_type;
-	uint16_t arch_id;
-	arm_arch_e arch;
-	cid_class_e cidc;
-#if ENABLE_DEBUG == 1
-	const char *type;
-	const char *full;
-#endif
-} arm_component_lut[] = {
-	{0x000, 0x00, 0, aa_cortexm, cidc_gipc, ARM_COMPONENT_STR("Cortex-M3 SCS", "(System Control Space)")},
-	{0x001, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 ITM", "(Instrumentation Trace Module)")},
-	{0x002, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 DWT", "(Data Watchpoint and Trace)")},
-	{0x003, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 FBP", "(Flash Patch and Breakpoint)")},
-	{0x008, 0x00, 0, aa_cortexm, cidc_gipc, ARM_COMPONENT_STR("Cortex-M0 SCS", "(System Control Space)")},
-	{0x00a, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M0 DWT", "(Data Watchpoint and Trace)")},
-	{0x00b, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M0 BPU", "(Breakpoint Unit)")},
-	{0x00c, 0x00, 0, aa_cortexm, cidc_gipc, ARM_COMPONENT_STR("Cortex-M4 SCS", "(System Control Space)")},
-	{0x00d, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight ETM11", "(Embedded Trace)")},
-	{0x00e, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 FBP", "(Flash Patch and Breakpoint)")},
-	{0x101, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("System TSGEN", "(Time Stamp Generator)")},
-	{0x471, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M0  ROM", "(Cortex-M0 ROM)")},
-	{0x490, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A15 GIC", "(Generic Interrupt Controller)")},
-	{0x4c0, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M0+ ROM", "(Cortex-M0+ ROM)")},
-	{0x4c3, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 ROM", "(Cortex-M3 ROM)")},
-	{0x4c4, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M4 ROM", "(Cortex-M4 ROM)")},
-	{0x4c7, 0x00, 0, aa_nosupport, cidc_unknown,
-		ARM_COMPONENT_STR("Cortex-M7 PPB", "(Cortex-M7 Private Peripheral Bus ROM Table)")},
-	{0x4c8, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 ROM", "(Cortex-M7 ROM)")},
-	{0x906, 0x14, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight CTI", "(Cross Trigger)")},
-	{0x907, 0x21, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight ETB", "(Trace Buffer)")},
-	{0x908, 0x12, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight CSTF", "(Trace Funnel)")},
-	{0x910, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight ETM9", "(Embedded Trace)")},
-	{0x912, 0x11, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight TPIU", "(Trace Port Interface Unit)")},
-	{0x913, 0x43, 0, aa_nosupport, cidc_unknown,
-		ARM_COMPONENT_STR("CoreSight ITM", "(Instrumentation Trace Macrocell)")},
-	{0x914, 0x11, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight SWO", "(Single Wire Output)")},
-	{0x917, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight HTM", "(AHB Trace Macrocell)")},
-	{0x920, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight ETM11", "(Embedded Trace)")},
-	{0x921, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A8 ETM", "(Embedded Trace)")},
-	{0x922, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A8 CTI", "(Cross Trigger)")},
-	{0x923, 0x11, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 TPIU", "(Trace Port Interface Unit)")},
-	{0x924, 0x13, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M3 ETM", "(Embedded Trace)")},
-	{0x925, 0x13, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M4 ETM", "(Embedded Trace)")},
-	{0x930, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-R4 ETM", "(Embedded Trace)")},
-	{0x932, 0x31, 0x0a31, aa_nosupport, cidc_unknown,
-		ARM_COMPONENT_STR("CoreSight MTB-M0+", "(Simple Execution Trace)")},
-	{0x941, 0x00, 0, aa_nosupport, cidc_unknown,
-		ARM_COMPONENT_STR("CoreSight TPIU-Lite", "(Trace Port Interface Unit)")},
-	{0x950, 0x13, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A9 PTM", "(Program Trace Macrocell)")},
-	{0x955, 0x00, 0, aa_nosupport, cidc_unknown,
-		ARM_COMPONENT_STR("CoreSight Component", "(unidentified Cortex-A5 component)")},
-	{0x956, 0x13, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A7 ETM", "(Embedded Trace)")},
-	{0x95f, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A15 PTM", "(Program Trace Macrocell)")},
-	{0x961, 0x32, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight TMC", "(Trace Memory Controller)")},
-	{0x961, 0x21, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight TMC", "(Trace Buffer)")},
-	{0x962, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight STM", "(System Trace Macrocell)")},
-	{0x963, 0x63, 0x0a63, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight STM", "(System Trace Macrocell)")},
-	{0x975, 0x13, 0x4a13, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 ETM", "(Embedded Trace)")},
-	{0x9a0, 0x16, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("CoreSight PMU", "(Performance Monitoring Unit)")},
-	{0x9a1, 0x11, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M4 TPIU", "(Trace Port Interface Unit)")},
-	{0x9a6, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M0+ CTI", "(Cross Trigger Interface)")},
-	{0x9a9, 0x11, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-M7 TPIU", "(Trace Port Interface Unit)")},
-	{0x9a5, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A5 ETM", "(Embedded Trace)")},
-	{0x9a7, 0x16, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A7 PMU", "(Performance Monitor Unit)")},
-	{0x9af, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A15 PMU", "(Performance Monitor Unit)")},
-	{0xc05, 0x00, 0, aa_cortexa, cidc_dc, ARM_COMPONENT_STR("Cortex-A5 Debug", "(Debug Unit)")},
-	{0xc07, 0x15, 0, aa_cortexa, cidc_dc, ARM_COMPONENT_STR("Cortex-A7 Debug", "(Debug Unit)")},
-	{0xc08, 0x00, 0, aa_cortexa, cidc_dc, ARM_COMPONENT_STR("Cortex-A8 Debug", "(Debug Unit)")},
-	{0xc09, 0x15, 0, aa_cortexa, cidc_dc, ARM_COMPONENT_STR("Cortex-A9 Debug", "(Debug Unit)")},
-	{0xc0f, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Cortex-A15 Debug", "(Debug Unit)")}, /* support? */
-	{0xc14, 0x15, 0, aa_cortexr, cidc_unknown, ARM_COMPONENT_STR("Cortex-R4", "(Debug Unit)")},
-	{0xcd0, 0x00, 0, aa_nosupport, cidc_unknown, ARM_COMPONENT_STR("Atmel DSU", "(Device Service Unit)")},
-	{0xd20, 0x00, 0x2a04, aa_cortexm, cidc_gipc, ARM_COMPONENT_STR("Cortex-M23", "(System Control Space)")},
-	{0xd20, 0x11, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Trace Port Interface Unit)")},
-	{0xd20, 0x13, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Embedded Trace)")},
-	{0xd20, 0x31, 0x0a31, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Micro Trace Buffer)")},
-	{0xd20, 0x00, 0x1a02, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Data Watchpoint and Trace)")},
-	{0xd20, 0x00, 0x1a03, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Breakpoint Unit)")},
-	{0xd20, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M23", "(Cross Trigger)")},
-	{0xd21, 0x00, 0x2a04, aa_cortexm, cidc_gipc, ARM_COMPONENT_STR("Cortex-M33", "(System Control Space)")},
-	{0xd21, 0x31, 0x0a31, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Micro Trace Buffer)")},
-	{0xd21, 0x43, 0x1a01, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Instrumentation Trace Macrocell)")},
-	{0xd21, 0x00, 0x1a02, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Data Watchpoint and Trace)")},
-	{0xd21, 0x00, 0x1a03, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Breakpoint Unit)")},
-	{0xd21, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Cross Trigger)")},
-	{0xd21, 0x13, 0x4a13, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Embedded Trace)")},
-	{0xd21, 0x11, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("Cortex-M33", "(Trace Port Interface Unit)")},
-	{0x132, 0x31, 0x0a31, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 MTB", "(Execution Trace)")},
-	{0x132, 0x43, 0x1a01, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 ITM", "(Instrumentation Trace Module)")},
-	{0x132, 0x00, 0x1a02, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 DWT", "(Data Watchpoint and Trace)")},
-	{0x132, 0x00, 0x1a03, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 BPU", "(Breakpoint Unit)")},
-	{0x132, 0x14, 0x1a14, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 CTI", "(Cross Trigger)")},
-	{0x132, 0x00, 0x2a04, aa_cortexm, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 SCS", "(System Control Space)")},
-	{0x132, 0x13, 0x4a13, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 ETM", "(Embedded Trace)")},
-	{0x132, 0x11, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("STAR-MC1 TPIU", "(Trace Port Interface Unit)")},
-	{0x9a3, 0x13, 0, aa_nosupport, cidc_dc, ARM_COMPONENT_STR("nRF NTB", "(Nordic Trace Buffer)")},
-	{0xfff, 0x00, 0, aa_end, cidc_unknown, ARM_COMPONENT_STR("end", "end")},
-};
-
-#if ENABLE_DEBUG == 1
-static const char *adiv5_arm_ap_type_string(const uint8_t ap_type, const uint8_t ap_class)
-{
-	/*
-	 * Values taken from ADIv5 spec §C1.3 pg146.
-	 * table C1-2 "AP Identification types for an AP designed by Arm"
-	 */
-
-	/* All types except 0 are only valid for ap_class == 0x8 */
-	if (ap_class == ADIV5_AP_IDR_CLASS_MEM || ap_type == 0U) {
-		switch (ap_type) {
-		case 0U:
-			/* Type 0 APs are determined by the class code */
-			if (ap_class == ADIV5_AP_IDR_CLASS_JTAG)
-				return "JTAG-AP";
-			if (ap_class == ADIV5_AP_IDR_CLASS_COM)
-				return "COM-AP";
-			break;
-		case 0x1U:
-			return "AHB3-AP";
-		case 0x2U:
-			return "APB2/3-AP";
-		/* 0x3 is not defined */
-		case 0x4U:
-			return "AXI3/4-AP";
-		case 0x5U:
-			return "AHB5-AP";
-		case 0x6U:
-			return "APB4/5-AP";
-		case 0x7U:
-			return "AXI5-AP";
-		case 0x8U:
-			return "AHB5-AP";
-		default:
-			break;
-		}
-	}
-	return "Unknown";
-}
-
-static const char *adiv5_cid_class_string(const cid_class_e cid_class)
-{
-	switch (cid_class) {
-	case cidc_gvc:
-		return "Generic verification component";
-	case cidc_romtab:
-		return "ROM Table";
-	case cidc_dc:
-		return "Debug component";
-	case cidc_ptb:
-		return "Peripheral Test Block";
-	case cidc_dess:
-		return "OptimoDE Data Engine SubSystem component";
-	case cidc_gipc:
-		return "Generic IP component";
-	case cidc_sys:
-		return "Non STD System component";
-	default:
-		return "Unknown component"; /* Noted as reserved in the spec */
-	}
-};
-#endif
-
-/* Used to probe for a protected SAMX5X device */
-#define SAMX5X_DSU_CTRLSTAT 0x41002100U
-#define SAMX5X_STATUSB_PROT (1U << 16U)
+#define S32K344_TARGET_PARTNO        0x995cU
+#define S32K3xx_APB_AP               1U
+#define S32K3xx_AHB_AP               4U
+#define S32K3xx_MDM_AP               6U
+#define S32K3xx_SDA_AP               7U
+#define S32K3xx_SDA_AP_DBGENCTR      ADIV5_AP_REG(0x80U)
+#define S32K3xx_SDA_AP_DBGENCTR_MASK 0x300000f0U
 
 void adiv5_ap_ref(adiv5_access_port_s *ap)
 {
@@ -360,40 +84,6 @@ void adiv5_ap_unref(adiv5_access_port_s *ap)
 	}
 }
 
-static uint32_t adiv5_mem_read32(adiv5_access_port_s *ap, uint32_t addr)
-{
-	uint32_t ret;
-	adiv5_mem_read(ap, &ret, addr, sizeof(ret));
-	return ret;
-}
-
-static uint32_t adiv5_ap_read_id(adiv5_access_port_s *ap, uint32_t addr)
-{
-	uint32_t res = 0;
-	uint8_t data[16];
-	adiv5_mem_read(ap, data, addr, sizeof(data));
-	for (size_t i = 0; i < 4U; ++i)
-		res |= (uint32_t)data[4U * i] << (i * 8U);
-	return res;
-}
-
-static uint64_t adiv5_ap_read_pidr(adiv5_access_port_s *ap, uint32_t addr)
-{
-	uint64_t pidr = adiv5_ap_read_id(ap, addr + PIDR4_OFFSET);
-	pidr = pidr << 32U | adiv5_ap_read_id(ap, addr + PIDR0_OFFSET);
-	return pidr;
-}
-
-/*
- * Decode a designer code that's in the following form into BMD's internal designer code representation
- * Bits 10:7 - JEP-106 Continuation code
- * Bits 6:0 - JEP-106 Identity code
- */
-static inline uint16_t adiv5_decode_designer(const uint16_t designer)
-{
-	return (designer & ADIV5_DP_DESIGNER_JEP106_CONT_MASK) << 1U | (designer & ADIV5_DP_DESIGNER_JEP106_CODE_MASK);
-}
-
 /*
  * This function tries to halt Cortex-M processors.
  * To handle WFI and other sleep states, it does this in as tight a loop as it can,
@@ -409,7 +99,7 @@ static uint32_t cortexm_initial_halt(adiv5_access_port_s *ap)
 	platform_timeout_set(&halt_timeout, cortexm_wait_timeout);
 
 	/* Setup to read/write DHCSR */
-	/* adiv5_mem_access_setup() uses ADIV5_AP_CSW_ADDRINC_SINGLE which is undesirable for our use here */
+	/* adi_ap_mem_access_setup() uses ADIV5_AP_CSW_ADDRINC_SINGLE which is undesirable for our use here */
 	adiv5_ap_write(ap, ADIV5_AP_CSW, ap->csw | ADIV5_AP_CSW_SIZE_WORD);
 	adiv5_dp_low_access(ap->dp, ADIV5_LOW_WRITE, ADIV5_AP_TAR_LOW, CORTEXM_DHCSR);
 	/* Write (and do a dummy read of) DHCSR to ensure debug is enabled */
@@ -493,14 +183,14 @@ static bool cortexm_prepare(adiv5_access_port_s *ap)
 	if (!dhcsr) {
 		DEBUG_ERROR("Halt via DHCSR(%08" PRIx32 "): failure after %" PRIu32 "ms\nTry again with longer "
 					"timeout or connect under reset\n",
-			adiv5_mem_read32(ap, CORTEXM_DHCSR), platform_time_ms() - start_time);
+			adi_mem_read32(ap, CORTEXM_DHCSR), platform_time_ms() - start_time);
 		return false;
 	}
 	/* Clear any residual WAIT fault code to keep things in good state for the next steps */
 	ap->dp->fault = 0;
 	DEBUG_INFO("Halt via DHCSR(%08" PRIx32 "): success after %" PRIu32 "ms\n", dhcsr, platform_time_ms() - start_time);
 	/* Save the old value of DEMCR and enable the DWT, and both vector table debug bits */
-	ap->ap_cortexm_demcr = adiv5_mem_read32(ap, CORTEXM_DEMCR);
+	ap->ap_cortexm_demcr = adi_mem_read32(ap, CORTEXM_DEMCR);
 	const uint32_t demcr = CORTEXM_DEMCR_TRCENA | CORTEXM_DEMCR_VC_HARDERR | CORTEXM_DEMCR_VC_CORERESET;
 	adiv5_mem_write(ap, CORTEXM_DEMCR, &demcr, sizeof(demcr));
 	/* Having setup DEMCR, try to observe the core being released from reset */
@@ -510,7 +200,7 @@ static bool cortexm_prepare(adiv5_access_port_s *ap)
 	platform_nrst_set_val(false);
 	while (true) {
 		/* Read back DHCSR and check if the reset status bit is still set */
-		dhcsr = adiv5_mem_read32(ap, CORTEXM_DHCSR);
+		dhcsr = adi_mem_read32(ap, CORTEXM_DHCSR);
 		if ((dhcsr & CORTEXM_DHCSR_S_RESET_ST) == 0)
 			break;
 		/* If it is and we timeout, turn that into an error */
@@ -523,335 +213,16 @@ static bool cortexm_prepare(adiv5_access_port_s *ap)
 	return true;
 }
 
-static cid_class_e adiv5_class_from_cid(const uint16_t part_number, const uint16_t arch_id, const cid_class_e cid_class)
+adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *const dp, const uint8_t apsel)
 {
-	/*
-	 * Cortex-M23 and 33 incorrectly list their SCS's as a debug component,
-	 * but they're a generic IP component, so we adjust the cid_class.
-	 */
-	if ((part_number == 0xd20U || part_number == 0xd21U) && arch_id == 0x2a04U && cid_class == cidc_dc)
-		return cidc_gipc;
-	return cid_class;
-}
-
-/*
- * Return true if we find a debuggable device.
- * NOLINTNEXTLINE(misc-no-recursion)
- */
-static void adiv5_component_probe(
-	adiv5_access_port_s *ap, target_addr_t addr, const size_t recursion, const uint32_t num_entry)
-{
-#ifdef DEBUG_WARN_IS_NOOP
-	(void)num_entry;
-#endif
-
-	const volatile uint32_t cidr = adiv5_ap_read_id(ap, addr + CIDR0_OFFSET);
-	if (ap->dp->fault) {
-		DEBUG_ERROR("Error reading CIDR on AP%u: %u\n", ap->apsel, ap->dp->fault);
-		return;
-	}
-
-#if ENABLE_DEBUG == 1
-	char *indent = alloca(recursion + 1U);
-
-	for (size_t i = 0; i < recursion; i++)
-		indent[i] = ' ';
-	indent[recursion] = 0;
-#endif
-
-	if (adiv5_dp_error(ap->dp)) {
-		DEBUG_ERROR("%sFault reading ID registers\n", indent);
-		return;
-	}
-
-	/* CIDR preamble sanity check */
-	if ((cidr & ~CID_CLASS_MASK) != CID_PREAMBLE) {
-		DEBUG_WARN("%s%" PRIu32 " 0x%08" PRIx32 ": 0x%08" PRIx32 " <- does not match preamble (0x%08" PRIx32 ")\n",
-			indent, num_entry, addr, cidr, CID_PREAMBLE);
-		return;
-	}
-
-	/* Extract Component ID class nibble */
-	const uint32_t cid_class = (cidr & CID_CLASS_MASK) >> CID_CLASS_SHIFT;
-	const uint64_t pidr = adiv5_ap_read_pidr(ap, addr);
-
-	uint16_t designer_code;
-	if (pidr & PIDR_JEP106_USED) {
-		/* (OFFSET - 8) because we want it on bits 11:8 of new code, see "JEP-106 code list" */
-		designer_code = (pidr & PIDR_JEP106_CONT_MASK) >> (PIDR_JEP106_CONT_OFFSET - 8U) |
-			(pidr & PIDR_JEP106_CODE_MASK) >> PIDR_JEP106_CODE_OFFSET;
-
-	} else {
-		/* legacy ascii code */
-		designer_code = (pidr & PIDR_JEP106_CODE_MASK) >> PIDR_JEP106_CODE_OFFSET | ASCII_CODE_FLAG;
-	}
-
-	if (designer_code == JEP106_MANUFACTURER_ERRATA_STM32WX || designer_code == JEP106_MANUFACTURER_ERRATA_CS ||
-		designer_code == JEP106_MANUFACTURER_ERRATA_CS_ASCII) {
-		/**
-         * see 'JEP-106 code list' for context, here we are aliasing codes that are non compliant with the
-         * JEP-106 standard to their expected codes, this is later used to determine the correct probe function.
-         */
-		DEBUG_WARN("Patching Designer code %03x -> %03x\n", designer_code, JEP106_MANUFACTURER_STM);
-		designer_code = JEP106_MANUFACTURER_STM;
-	}
-
-	/* Extract part number from the part id register. */
-	const uint16_t part_number = pidr & PIDR_PN_MASK;
-
-	/* ROM table */
-	if (cid_class == cidc_romtab) {
-		if (recursion == 0) {
-			ap->designer_code = designer_code;
-			ap->partno = part_number;
-
-			if (ap->designer_code == JEP106_MANUFACTURER_ATMEL && ap->partno == 0xcd0U) {
-				uint32_t ctrlstat = adiv5_mem_read32(ap, SAMX5X_DSU_CTRLSTAT);
-				if (ctrlstat & SAMX5X_STATUSB_PROT) {
-					/* A protected SAMx5x device is found.
-					 * Handle it here, as access only to limited memory region
-					 * is allowed
-					 */
-					cortexm_probe(ap);
-					return;
-				}
-			}
-		}
-
-		/* Check SYSMEM bit */
-		const bool memtype = adiv5_mem_read32(ap, addr | ADIV5_ROM_MEMTYPE) & ADIV5_ROM_MEMTYPE_SYSMEM;
-		if (adiv5_dp_error(ap->dp))
-			DEBUG_ERROR("Fault reading ROM table entry\n");
-		else if (memtype)
-			ap->flags |= ADIV5_AP_FLAGS_HAS_MEM;
-		DEBUG_INFO("ROM: Table BASE=0x%" PRIx32 " SYSMEM=%u, Manufacturer %03x Partno %03x (PIDR = 0x%08" PRIx32
-				   "%08" PRIx32 ")\n",
-			addr, memtype, designer_code, part_number, (uint32_t)(pidr >> 32), (uint32_t)pidr);
-
-		for (uint32_t i = 0; i < 960U; i++) {
-			adiv5_dp_error(ap->dp);
-
-			uint32_t entry = adiv5_mem_read32(ap, addr + i * 4U);
-			if (adiv5_dp_error(ap->dp)) {
-				DEBUG_ERROR("%sFault reading ROM table entry %" PRIu32 "\n", indent, i);
-				break;
-			}
-
-			if (entry == 0)
-				break;
-
-			if (!(entry & ADIV5_ROM_ROMENTRY_PRESENT)) {
-				DEBUG_INFO("%s%" PRIu32 " Entry 0x%" PRIx32 " -> Not present\n", indent, i, entry);
-				continue;
-			}
-
-			/* Probe recursively */
-			adiv5_component_probe(ap, addr + (entry & ADIV5_ROM_ROMENTRY_OFFSET), recursion + 1U, i);
-		}
-		DEBUG_INFO("%sROM: Table END\n", indent);
-
-	} else {
-		if (designer_code != JEP106_MANUFACTURER_ARM && designer_code != JEP106_MANUFACTURER_ARM_CHINA) {
-			/* non-ARM components are not supported currently */
-			DEBUG_WARN("%s%" PRIu32 " 0x%" PRIx32 ": 0x%08" PRIx32 "%08" PRIx32 " Non-ARM component ignored\n",
-				indent + 1, num_entry, addr, (uint32_t)(pidr >> 32U), (uint32_t)pidr);
-			DEBUG_TARGET("%s -> designer: %x, part no: %x\n", indent, designer_code, part_number);
-			return;
-		}
-
-		/* ADIv5: For CoreSight components, read DEVTYPE and ARCHID */
-		uint16_t arch_id = 0;
-		uint8_t dev_type = 0;
-		if (cid_class == cidc_dc) {
-			dev_type = adiv5_mem_read32(ap, addr + DEVTYPE_OFFSET) & DEVTYPE_MASK;
-
-			uint32_t devarch = adiv5_mem_read32(ap, addr + DEVARCH_OFFSET);
-
-			if (devarch & DEVARCH_PRESENT)
-				arch_id = devarch & DEVARCH_ARCHID_MASK;
-		}
-
-		/* Find the part number in our part list and run the appropriate probe routine if applicable. */
-		size_t i;
-		for (i = 0; arm_component_lut[i].arch != aa_end; i++) {
-			if (arm_component_lut[i].part_number != part_number || arm_component_lut[i].dev_type != dev_type ||
-				arm_component_lut[i].arch_id != arch_id)
-				continue;
-
-			DEBUG_INFO("%s%" PRIu32 " 0x%" PRIx32 ": %s - %s %s (PIDR = 0x%08" PRIx32 "%08" PRIx32 " DEVTYPE = 0x%02x "
-					   "ARCHID = 0x%04x)\n",
-				indent + 1, num_entry, addr, adiv5_cid_class_string(cid_class), arm_component_lut[i].type,
-				arm_component_lut[i].full, (uint32_t)(pidr >> 32U), (uint32_t)pidr, dev_type, arch_id);
-
-			const cid_class_e adjusted_class = adiv5_class_from_cid(part_number, arch_id, cid_class);
-			/* Perform sanity check, if we know what to expect as * component ID class. */
-			if (arm_component_lut[i].cidc != cidc_unknown && adjusted_class != arm_component_lut[i].cidc)
-				DEBUG_WARN("%s\"%s\" expected, got \"%s\"\n", indent + 1,
-					adiv5_cid_class_string(arm_component_lut[i].cidc), adiv5_cid_class_string(adjusted_class));
-
-			switch (arm_component_lut[i].arch) {
-			case aa_cortexm:
-				DEBUG_INFO("%s-> cortexm_probe\n", indent + 1);
-				cortexm_probe(ap);
-				break;
-			case aa_cortexa:
-				DEBUG_INFO("%s-> cortexa_probe\n", indent + 1);
-				cortexa_probe(ap, addr);
-				break;
-			case aa_cortexr:
-				DEBUG_INFO("%s-> cortexr_probe\n", indent + 1);
-				cortexr_probe(ap, addr);
-				break;
-			default:
-				break;
-			}
-			break;
-		}
-		if (arm_component_lut[i].arch == aa_end) {
-			DEBUG_WARN("%s%" PRIu32 " 0x%" PRIx32 ": %s - Unknown (PIDR = 0x%08" PRIx32 "%08" PRIx32 " DEVTYPE = "
-					   "0x%02x ARCHID = 0x%04x)\n",
-				indent, num_entry, addr, adiv5_cid_class_string(cid_class), (uint32_t)(pidr >> 32U), (uint32_t)pidr,
-				dev_type, arch_id);
-		}
-	}
-}
-
-static void adiv5_display_ap(const adiv5_access_port_s *const ap)
-{
-#if ENABLE_DEBUG == 1
-	const uint8_t ap_type = ADIV5_AP_IDR_TYPE(ap->idr);
-	const uint8_t ap_class = ADIV5_AP_IDR_CLASS(ap->idr);
-	const uint16_t designer = adiv5_decode_designer(ADIV5_AP_IDR_DESIGNER(ap->idr));
-	/* If this is an ARM-designed AP, map the AP type. Otherwise display "Unknown" */
-	const char *const ap_type_name =
-		designer == JEP106_MANUFACTURER_ARM ? adiv5_arm_ap_type_string(ap_type, ap_class) : "Unknown";
-	/* Display the AP's type, variant and revision information */
-	DEBUG_INFO(" (%s var%" PRIx32 " rev%" PRIx32 ")\n", ap_type_name, ADIV5_AP_IDR_VARIANT(ap->idr),
-		ADIV5_AP_IDR_REVISION(ap->idr));
-#else
-	(void)ap;
-#endif
-}
-
-adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *dp, uint8_t apsel)
-{
-	adiv5_access_port_s ap = {0};
-	/* Assume valid and try to read IDR */
-	ap.dp = dp;
-	ap.apsel = apsel;
-	/* Grab the ID register and make sure the value is sane (non-zero) */
-	ap.idr = adiv5_ap_read(&ap, ADIV5_AP_IDR);
-	if (!ap.idr)
+	adiv5_access_port_s ap = {
+		.dp = dp,
+		.apsel = apsel,
+	};
+	/* Try to configure the AP for use */
+	if (!adi_configure_ap(&ap))
 		return NULL;
-	const uint8_t ap_type = ADIV5_AP_IDR_TYPE(ap.idr);
-	const uint8_t ap_class = ADIV5_AP_IDR_CLASS(ap.idr);
-	DEBUG_INFO("AP %3u: IDR=%08" PRIx32, apsel, ap.idr);
-	/* If this is a MEM-AP */
-	if (ap_class == ADIV5_AP_IDR_CLASS_MEM && ap_type >= 1U && ap_type <= 8U) {
-		/* Grab the config, base and CSW registers */
-		const uint32_t cfg = adiv5_ap_read(&ap, ADIV5_AP_CFG);
-		ap.csw = adiv5_ap_read(&ap, ADIV5_AP_CSW);
-		/* This reads the lower half of BASE */
-		ap.base = adiv5_ap_read(&ap, ADIV5_AP_BASE_LOW);
-		const uint8_t base_flags = (uint8_t)ap.base & (ADIV5_AP_BASE_FORMAT | ADIV5_AP_BASE_PRESENT);
-		/* Make sure we only pay attention to the base address, not the presence and format bits */
-		ap.base &= ADIV5_AP_BASE_BASEADDR;
-		/* Check if this is a 64-bit AP */
-		if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS) {
-			/* If this base value is invalid for a LPAE MEM-AP, bomb out here */
-			if (base_flags == (ADIV5_AP_BASE_FORMAT_LEGACY | ADIV5_AP_BASE_PRESENT_NO_ENTRY)) {
-				DEBUG_INFO(" -> Invalid\n");
-				return NULL;
-			}
-			/* Otherwise note this is a 64-bit AP and read the high part */
-			ap.flags |= ADIV5_AP_FLAGS_64BIT;
-			ap.base |= (uint64_t)adiv5_ap_read(&ap, ADIV5_AP_BASE_HIGH) << 32U;
-		}
-		/* Check the Debug Base Address register for not-present. See ADIv5 Specification C2.6.1 */
-		if (base_flags == (ADIV5_AP_BASE_FORMAT_ADIV5 | ADIV5_AP_BASE_PRESENT_NO_ENTRY) ||
-			(!(ap.flags & ADIV5_AP_FLAGS_64BIT) && (uint32_t)ap.base == ADIV5_AP_BASE_NOT_PRESENT)) {
-			/*
-			 * Debug Base Address not present in this MEM-AP
-			 * No debug entries... useless AP
-			 * AP0 on STM32MP157C reads 0x00000002
-			 */
-			DEBUG_INFO(" -> Not Present\n");
-			return NULL;
-		}
-		/* Check if the AP is disabled, skipping it if that is the case */
-		if ((ap.csw & ADIV5_AP_CSW_AP_ENABLED) == 0U) {
-			DEBUG_INFO(" -> Disabled\n");
-			return NULL;
-		}
 
-		/* Apply bus-common fixups to the CSW value */
-		ap.csw &= ~(ADIV5_AP_CSW_SIZE_MASK | ADIV5_AP_CSW_ADDRINC_MASK);
-		ap.csw |= ADIV5_AP_CSW_DBGSWENABLE;
-
-		switch (ap_type) {
-		case ADIV5_AP_IDR_TYPE_AXI3_4:
-			/* XXX: Handle AXI4 w/ ACE-Lite which makes Mode and Type do ~things~™ (§E1.3.1, pg237) */
-			/* Clear any existing prot modes and disable memory tagging */
-			ap.csw &= ~(ADIV5_AP_CSW_AXI3_4_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
-			/* Check if secure access is allowed and enable it if so */
-			if (ap.csw & ADIV5_AP_CSW_SPIDEN)
-				ap.csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
-			else
-				ap.csw |= ADIV5_AP_CSW_AXI_PROT_NS;
-			/* Always privileged accesses */
-			ap.csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
-			break;
-		case ADIV5_AP_IDR_TYPE_AXI5:
-			/* Clear any existing prot modes and disable memory tagging */
-			ap.csw &= ~(ADIV5_AP_CSW_AXI5_PROT_MASK | ADIV5_AP_CSW_AXI_MTE);
-			/* Check if secure access is allowed and enable it if so */
-			if (ap.csw & ADIV5_AP_CSW_SPIDEN)
-				ap.csw &= ~ADIV5_AP_CSW_AXI_PROT_NS;
-			else
-				ap.csw |= ADIV5_AP_CSW_AXI_PROT_NS;
-			/* Always privileged accesses */
-			ap.csw |= ADIV5_AP_CSW_AXI_PROT_PRIV;
-			break;
-		case ADIV5_AP_IDR_TYPE_AHB3:
-		case ADIV5_AP_IDR_TYPE_AHB5:
-			/* Clear any existing HPROT modes */
-			ap.csw &= ~ADIV5_AP_CSW_AHB_HPROT_MASK;
-			/*
-			 * Ensure that MasterType is set to generate transactions as requested from the AHB-AP,
-			 * and that we generate privileged data requests via the HPROT bits
-			 */
-			ap.csw |= ADIV5_AP_CSW_AHB_MASTERTYPE | ADIV5_AP_CSW_AHB_HPROT_DATA | ADIV5_AP_CSW_AHB_HPROT_PRIV;
-			/* Check to see if secure access is supported and allowed */
-			if (ap.csw & ADIV5_AP_CSW_SPIDEN)
-				ap.csw &= ~ADIV5_AP_CSW_AHB_HNONSEC;
-			else
-				ap.csw |= ADIV5_AP_CSW_AHB_HNONSEC;
-			break;
-		case ADIV5_AP_IDR_TYPE_APB4_5:
-			/* Clear any existing prot modes and disable memory tagging */
-			ap.csw &= ~ADIV5_AP_CSW_APB_PPROT_MASK;
-			/* Check if secure access is allowed and enable it if so */
-			if (ap.csw & ADIV5_AP_CSW_SPIDEN)
-				ap.csw &= ~ADIV5_AP_CSW_APB_PPROT_NS;
-			else
-				ap.csw |= ADIV5_AP_CSW_APB_PPROT_NS;
-			ap.csw |= ADIV5_AP_CSW_APB_PPROT_PRIV;
-			break;
-		}
-
-		if (cfg & ADIV5_AP_CFG_LARGE_ADDRESS)
-			DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 "%08" PRIx32 " CSW=%08" PRIx32, cfg,
-				(uint32_t)(ap.base >> 32U), (uint32_t)ap.base, ap.csw);
-		else
-			DEBUG_INFO(" CFG=%08" PRIx32 " BASE=%08" PRIx32 " CSW=%08" PRIx32, cfg, (uint32_t)ap.base, ap.csw);
-
-		if (ap.csw & ADIV5_AP_CSW_TRINPROG) {
-			DEBUG_ERROR("AP %3u: Transaction in progress. AP is not usable!\n", apsel);
-			return NULL;
-		}
-	}
-
-	adiv5_display_ap(&ap);
 	/* It's valid to so create a heap copy */
 	adiv5_access_port_s *result = malloc(sizeof(*result));
 	if (!result) { /* malloc failed: heap exhaustion */
@@ -865,7 +236,7 @@ adiv5_access_port_s *adiv5_new_ap(adiv5_debug_port_s *dp, uint8_t apsel)
 }
 
 /* No real AP on RP2040. Special setup.*/
-static void rp_rescue_setup(adiv5_debug_port_s *dp)
+static void rp2040_rescue_setup(adiv5_debug_port_s *dp)
 {
 	adiv5_access_port_s *ap = calloc(1, sizeof(*ap));
 	if (!ap) { /* calloc failed: heap exhaustion */
@@ -874,7 +245,7 @@ static void rp_rescue_setup(adiv5_debug_port_s *dp)
 	}
 	ap->dp = dp;
 
-	rp_rescue_probe(ap);
+	rp2040_rescue_probe(ap);
 }
 
 static void adiv5_dp_clear_sticky_errors(adiv5_debug_port_s *dp)
@@ -894,6 +265,8 @@ static void adiv5_dp_clear_sticky_errors(adiv5_debug_port_s *dp)
 /* Keep the TRY/CATCH funkiness contained to avoid clobbering and reduce the need for volatiles */
 uint32_t adiv5_dp_read_dpidr(adiv5_debug_port_s *const dp)
 {
+	if (dp->read_no_check)
+		return adiv5_read_no_check(dp, ADIV5_DP_DPIDR);
 	volatile uint32_t dpidr = 0;
 	TRY (EXCEPTION_ALL) {
 		dpidr = adiv5_dp_low_access(dp, ADIV5_LOW_READ, ADIV5_DP_DPIDR, 0U);
@@ -904,14 +277,6 @@ uint32_t adiv5_dp_read_dpidr(adiv5_debug_port_s *const dp)
 	}
 	return dpidr;
 }
-
-#define S32K344_TARGET_PARTNO        0x995cU
-#define S32K3xx_APB_AP               1U
-#define S32K3xx_AHB_AP               4U
-#define S32K3xx_MDM_AP               6U
-#define S32K3xx_SDA_AP               7U
-#define S32K3xx_SDA_AP_DBGENCTR      ADIV5_AP_REG(0x80U)
-#define S32K3xx_SDA_AP_DBGENCTR_MASK 0x300000f0U
 
 static bool s32k3xx_dp_prepare(adiv5_debug_port_s *const dp)
 {
@@ -934,29 +299,23 @@ static bool s32k3xx_dp_prepare(adiv5_debug_port_s *const dp)
 	adiv5_access_port_s *apb_ap = adiv5_new_ap(dp, S32K3xx_APB_AP);
 	if (!apb_ap)
 		return false;
-	adiv5_component_probe(apb_ap, apb_ap->base, 0, 0);
+	adi_ap_component_probe(apb_ap, apb_ap->base, 0, 0);
 	adiv5_ap_unref(apb_ap);
 
 	adiv5_access_port_s *ahb_ap = adiv5_new_ap(dp, S32K3xx_AHB_AP);
 	if (!ahb_ap)
 		return false;
-	adiv5_component_probe(ahb_ap, ahb_ap->base, 0, 0);
+	adi_ap_component_probe(ahb_ap, ahb_ap->base, 0, 0);
 
 	cortexm_prepare(ahb_ap);
-	for (target_s *target = target_list; target; target = target->next) {
-		if (!connect_assert_nrst && target->priv_free == cortex_priv_free) {
-			adiv5_access_port_s *target_ap = cortex_ap(target);
-			if (target_ap == ahb_ap)
-				target_halt_resume(target, false);
-		}
-	}
+	adi_ap_resume_cores(ahb_ap);
 
 	adiv5_ap_unref(ahb_ap);
 
 	adiv5_access_port_s *mdm_ap = adiv5_new_ap(dp, S32K3xx_MDM_AP);
 	if (!mdm_ap)
 		return false;
-	adiv5_component_probe(mdm_ap, mdm_ap->base, 0, 0);
+	adi_ap_component_probe(mdm_ap, mdm_ap->base, 0, 0);
 	adiv5_ap_unref(mdm_ap);
 
 	return true;
@@ -1007,7 +366,7 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 	 */
 	dp->ap_write = adiv5_ap_reg_write;
 	dp->ap_read = adiv5_ap_reg_read;
-	dp->mem_read = advi5_mem_read_bytes;
+	dp->mem_read = adiv5_mem_read_bytes;
 	dp->mem_write = adiv5_mem_write_bytes;
 #if PC_HOSTED == 1
 	bmda_adiv5_dp_init(dp);
@@ -1039,7 +398,7 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		 * Note: this is the code of the designer not the implementer, we expect it to be ARM
 		 */
 		dp->designer_code =
-			adiv5_decode_designer((dpidr & ADIV5_DP_DPIDR_DESIGNER_MASK) >> ADIV5_DP_DPIDR_DESIGNER_OFFSET);
+			adi_decode_designer((dpidr & ADIV5_DP_DPIDR_DESIGNER_MASK) >> ADIV5_DP_DPIDR_DESIGNER_OFFSET);
 		dp->partno = (dpidr & ADIV5_DP_DPIDR_PARTNO_MASK) >> ADIV5_DP_DPIDR_PARTNO_OFFSET;
 
 		/* Minimal Debug Port (MINDP) functions implemented */
@@ -1084,7 +443,7 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		 * to our internal representation, See JEP-106 code list.
 		 */
 		dp->target_designer_code =
-			adiv5_decode_designer((targetid & ADIV5_DP_TARGETID_TDESIGNER_MASK) >> ADIV5_DP_TARGETID_TDESIGNER_OFFSET);
+			adi_decode_designer((targetid & ADIV5_DP_TARGETID_TDESIGNER_MASK) >> ADIV5_DP_TARGETID_TDESIGNER_OFFSET);
 
 		dp->target_partno = (targetid & ADIV5_DP_TARGETID_TPARTNO_MASK) >> ADIV5_DP_TARGETID_TPARTNO_OFFSET;
 
@@ -1096,7 +455,7 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 	}
 
 	if (dp->designer_code == JEP106_MANUFACTURER_RASPBERRY && dp->partno == 0x2U) {
-		rp_rescue_setup(dp);
+		rp2040_rescue_setup(dp);
 		return;
 	}
 
@@ -1107,11 +466,20 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		return;
 	}
 
+	/* If this is a DPv3+ device, switch to ADIv6 DP initialisation */
+	if (dp->version >= 3U) {
+		++dp->refcnt;
+		if (!adiv6_dp_init(dp))
+			DEBUG_ERROR("Error while discovering ADIv6 DP\n");
+		adiv5_dp_unref(dp);
+		return;
+	}
+
 	if (dp->target_designer_code == JEP106_MANUFACTURER_NXP)
 		lpc55_dp_prepare(dp);
 
 	/* Probe for APs on this DP */
-	size_t invalid_aps = 0;
+	size_t invalid_aps = 0U;
 	dp->refcnt++;
 
 	if (dp->target_designer_code == JEP106_MANUFACTURER_FREESCALE) {
@@ -1142,25 +510,16 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		efm32_aap_probe(ap);
 		lpc55_dmap_probe(ap);
 
-		/* Try to prepare the AP if it seems to be a AHB (memory) AP */
+		/* Try to prepare the AP if it seems to be a AHB3 MEM-AP */
 		if (!ap->apsel && ADIV5_AP_IDR_CLASS(ap->idr) == 8U && ADIV5_AP_IDR_TYPE(ap->idr) == ARM_AP_TYPE_AHB3) {
 			if (!cortexm_prepare(ap))
 				DEBUG_WARN("adiv5: Failed to prepare AP, results may be unpredictable\n");
 		}
 
 		/* The rest should only be added after checking ROM table */
-		adiv5_component_probe(ap, ap->base, 0, 0);
-		/*
-		 * Having completed discovery on this AP, if we're not in connect-under-reset mode,
-		 * and now that we're done with this AP's ROM tables, look for the target and resume the core.
-		 */
-		for (target_s *target = target_list; target; target = target->next) {
-			if (!connect_assert_nrst && target->priv_free == cortex_priv_free) {
-				adiv5_access_port_s *target_ap = cortex_ap(target);
-				if (target_ap == ap)
-					target_halt_resume(target, false);
-			}
-		}
+		adi_ap_component_probe(ap, ap->base, 0, 0);
+		/* Having completed discovery on this AP, try to resume any halted cores */
+		adi_ap_resume_cores(ap);
 
 		/*
 		 * Due to the Tiva TM4C1294KCDT (among others) repeating the single AP ad-nauseum,
@@ -1175,31 +534,6 @@ void adiv5_dp_init(adiv5_debug_port_s *const dp)
 		adiv5_ap_unref(ap);
 	}
 	adiv5_dp_unref(dp);
-}
-
-/* Program the CSW and TAR for sequential access at a given width */
-void adiv5_mem_access_setup(adiv5_access_port_s *const ap, const target_addr64_t addr, const align_e align)
-{
-	uint32_t csw = ap->csw | ADIV5_AP_CSW_ADDRINC_SINGLE;
-
-	switch (align) {
-	case ALIGN_8BIT:
-		csw |= ADIV5_AP_CSW_SIZE_BYTE;
-		break;
-	case ALIGN_16BIT:
-		csw |= ADIV5_AP_CSW_SIZE_HALFWORD;
-		break;
-	case ALIGN_64BIT:
-	case ALIGN_32BIT:
-		csw |= ADIV5_AP_CSW_SIZE_WORD;
-		break;
-	}
-	/* Select AP bank 0 and write CSW */
-	adiv5_ap_write(ap, ADIV5_AP_CSW, csw);
-	/* Then write TAR which is in the same AP bank */
-	if (ap->flags & ADIV5_AP_FLAGS_64BIT)
-		adiv5_dp_write(ap->dp, ADIV5_AP_TAR_HIGH, (uint32_t)(addr >> 32));
-	adiv5_dp_write(ap->dp, ADIV5_AP_TAR_LOW, (uint32_t)addr);
 }
 
 /* Unpack data from the source uint32_t value based on data alignment and source address */
@@ -1270,7 +604,7 @@ const void *adiv5_pack_data(
 	return (const uint8_t *)src + (1U << align);
 }
 
-void advi5_mem_read_bytes(adiv5_access_port_s *const ap, void *dest, const target_addr64_t src, const size_t len)
+void adiv5_mem_read_bytes(adiv5_access_port_s *const ap, void *dest, const target_addr64_t src, const size_t len)
 {
 	/* Do nothing and return if there's nothing to read */
 	if (len == 0U)
@@ -1283,7 +617,7 @@ void advi5_mem_read_bytes(adiv5_access_port_s *const ap, void *dest, const targe
 	/* Calculate how much each loop will increment the destination address by */
 	const uint8_t stride = 1U << align;
 	/* Set up the transfer */
-	adiv5_mem_access_setup(ap, src, align);
+	adi_ap_mem_access_setup(ap, src, align);
 	/* Now loop through the data and move it 1 stride at a time to the target */
 	for (; begin < end; begin += stride) {
 		/*
@@ -1315,7 +649,7 @@ void adiv5_mem_write_bytes(
 	/* Calculate how much each loop will increment the destination address by */
 	const uint8_t stride = 1U << align;
 	/* Set up the transfer */
-	adiv5_mem_access_setup(ap, dest, align);
+	adi_ap_mem_access_setup(ap, dest, align);
 	/* Now loop through the data and move it 1 stride at a time to the target */
 	for (; begin < end; begin += stride) {
 		/*
@@ -1368,7 +702,25 @@ static void decode_dp_access(const uint8_t addr, const uint8_t rnw, const uint32
 	/* Try to decode the requested address */
 	switch (addr) {
 	case 0x00U:
-		reg = rnw ? "DPIDR" : "ABORT";
+		/* If it's a read, it depends on the bank */
+		if (rnw) {
+			switch (dp_bank) {
+			case 0:
+				reg = "DPIDR";
+				break;
+			case 1:
+				reg = "DPIDR1";
+				break;
+			case 2:
+				reg = "BASEPTR0";
+				break;
+			case 3:
+				reg = "BASEPTR1";
+				break;
+			}
+		} else
+			/* Otherwise it must be a write to ABORT */
+			reg = "ABORT";
 		break;
 	case 0x04U:
 		switch (dp_bank) {
@@ -1386,6 +738,10 @@ static void decode_dp_access(const uint8_t addr, const uint8_t rnw, const uint32
 			break;
 		case 4:
 			reg = "EVENTSTAT";
+			break;
+		case 5:
+			if (!rnw)
+				reg = "SELECT1";
 			break;
 		}
 		break;
@@ -1405,48 +761,93 @@ static void decode_dp_access(const uint8_t addr, const uint8_t rnw, const uint32
 		DEBUG_PROTO("Unknown DP register %02x: ", addr);
 }
 
-static void decode_ap_access(const uint8_t ap, const uint8_t addr)
+static void decode_ap_access(const uint8_t ap, const uint16_t addr)
 {
 	DEBUG_PROTO("AP %u ", ap);
 
 	const char *reg = NULL;
 	switch (addr) {
-	case 0x00U:
+	case 0xd00U:
 		reg = "CSW";
 		break;
-	case 0x04U:
+	case 0xd04U:
 		reg = "TAR";
 		break;
-	case 0x0cU:
+	case 0xd0cU:
 		reg = "DRW";
 		break;
-	case 0x10U:
+	case 0xd10U:
 		reg = "DB0";
 		break;
-	case 0x14U:
+	case 0xd14U:
 		reg = "DB1";
 		break;
-	case 0x18U:
+	case 0xd18U:
 		reg = "DB2";
 		break;
-	case 0x1cU:
+	case 0xd1cU:
 		reg = "DB3";
 		break;
-	case 0xf8U:
+	case 0xdf8U:
 		reg = "BASE";
 		break;
-	case 0xf4U:
+	case 0xdf4U:
 		reg = "CFG";
 		break;
-	case 0xfcU:
+	case 0xdfcU:
 		reg = "IDR";
+		break;
+	case 0xfbc:
+		reg = "DEVARCH";
+		break;
+	case 0xfc8:
+		reg = "DEVID";
+		break;
+	case 0xfcc:
+		reg = "DEVTYPE";
+		break;
+	case 0xfd0:
+		reg = "PIDR4";
+		break;
+	case 0xfd4:
+		reg = "PIDR5";
+		break;
+	case 0xfd8:
+		reg = "PIDR6";
+		break;
+	case 0xfdc:
+		reg = "PIDR7";
+		break;
+	case 0xfe0:
+		reg = "PIDR0";
+		break;
+	case 0xfe4:
+		reg = "PIDR1";
+		break;
+	case 0xfe8:
+		reg = "PIDR2";
+		break;
+	case 0xfec:
+		reg = "PIDR3";
+		break;
+	case 0xff0:
+		reg = "CIDR0";
+		break;
+	case 0xff4:
+		reg = "CIDR1";
+		break;
+	case 0xff8:
+		reg = "CIDR2";
+		break;
+	case 0xffc:
+		reg = "CIDR3";
 		break;
 	}
 
 	if (reg)
 		DEBUG_PROTO("%s: ", reg);
 	else
-		DEBUG_PROTO("Reserved(%02x): ", addr);
+		DEBUG_PROTO("Reserved(%03x): ", addr);
 }
 
 void decode_access(const uint16_t addr, const uint8_t rnw, const uint8_t apsel, const uint32_t value)
@@ -1457,7 +858,7 @@ void decode_access(const uint16_t addr, const uint8_t rnw, const uint8_t apsel, 
 		DEBUG_PROTO("Write ");
 
 	if (addr & ADIV5_APnDP)
-		decode_ap_access(apsel, addr & 0xffU);
+		decode_ap_access(apsel, addr & 0x0fffU);
 	else
 		decode_dp_access(addr & 0xffU, rnw, value);
 }

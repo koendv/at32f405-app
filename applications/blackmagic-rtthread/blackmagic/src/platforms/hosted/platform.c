@@ -34,6 +34,7 @@
 #include "target.h"
 #include "target_internal.h"
 #include "adiv5.h"
+#include "riscv_debug.h"
 #include "timing.h"
 #include "cli.h"
 #include "gdb_if.h"
@@ -313,7 +314,7 @@ void bmda_adiv5_dp_init(adiv5_debug_port_s *const dp)
 	switch (bmda_probe_info.type) {
 	case PROBE_TYPE_BMP:
 		if (cl_opts.opt_no_hl) {
-			DEBUG_WARN("Not using HL commands\n");
+			DEBUG_WARN("Not using ADIv5 acceleration commands\n");
 			break;
 		}
 		remote_adiv5_dp_init(dp);
@@ -334,7 +335,28 @@ void bmda_adiv5_dp_init(adiv5_debug_port_s *const dp)
 	}
 }
 
-void bmda_jtag_dp_init(adiv5_debug_port_s *dp)
+void bmda_adiv6_dp_init(adiv5_debug_port_s *const dp)
+{
+	switch (bmda_probe_info.type) {
+	case PROBE_TYPE_BMP:
+		if (cl_opts.opt_no_hl) {
+			DEBUG_WARN("Not using ADIv6 acceleration commands\n");
+			break;
+		}
+		remote_adiv6_dp_init(dp);
+		break;
+#if HOSTED_BMP_ONLY == 0
+	case PROBE_TYPE_CMSIS_DAP:
+		dap_adiv6_dp_init(dp);
+		break;
+#endif
+
+	default:
+		break;
+	}
+}
+
+void bmda_jtag_dp_init(adiv5_debug_port_s *const dp)
 {
 #if HOSTED_BMP_ONLY == 0
 	switch (bmda_probe_info.type) {
@@ -350,6 +372,22 @@ void bmda_jtag_dp_init(adiv5_debug_port_s *dp)
 #else
 	(void)dp;
 #endif
+}
+
+void bmda_riscv_jtag_dtm_init(riscv_dmi_s *const dmi)
+{
+	switch (bmda_probe_info.type) {
+	case PROBE_TYPE_BMP:
+		if (cl_opts.opt_no_hl) {
+			DEBUG_WARN("Not using RISC-V Debug acceleration commands\n");
+			break;
+		}
+		remote_riscv_jtag_dtm_init(dmi);
+		break;
+
+	default:
+		break;
+	}
 }
 
 char *bmda_adaptor_ident(void)

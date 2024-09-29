@@ -20,6 +20,11 @@
 
 /* This file provides the platform specific declarations for the blackpill-f4 implementation. */
 
+/* References: ST doc
+ * RM0383 Rev 3, 2015: https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf
+ * DS10314 Rev 7, 2017: https://www.st.com/resource/en/datasheet/stm32f411ce.pdf
+ */
+
 #ifndef PLATFORMS_COMMON_BLACKPILL_F4_H
 #define PLATFORMS_COMMON_BLACKPILL_F4_H
 
@@ -61,6 +66,8 @@ extern bool debug_bmp;
 #if ALTERNATIVE_PINOUT < 1 || ALTERNATIVE_PINOUT > 3
 #error "Invalid value for ALTERNATIVE_PINOUT. Value is smaller than 1, or larger than 3. Value must be between 1 and 3"
 #endif
+#else
+#define ALTERNATIVE_PINOUT 0
 #endif /* ALTERNATIVE_PINOUT */
 
 /*
@@ -74,21 +81,21 @@ extern bool debug_bmp;
  * The maximum number of input arguments is 4.
  * The 3rd and 4th arguments to this function are optional.
  */
-#ifndef ALTERNATIVE_PINOUT              // if ALTERNATIVE_PINOUT is not defined
-#define PINOUT_SWITCH(opt0, ...) (opt0) // select the first argument
+#if ALTERNATIVE_PINOUT == 0
+#define PINOUT_SWITCH(opt0, ...) (opt0) // Select the first argument
 #elif ALTERNATIVE_PINOUT == 1
-#define PINOUT_SWITCH(opt0, opt1, ...) (opt1) // select the second argument
+#define PINOUT_SWITCH(opt0, opt1, ...) (opt1) // Select the second argument
 #elif ALTERNATIVE_PINOUT == 2
-#define PINOUT_SWITCH(opt0, opt1, opt2, ...) (opt2) // select the third argument
+#define PINOUT_SWITCH(opt0, opt1, opt2, ...) (opt2) // Select the third argument
 #elif ALTERNATIVE_PINOUT == 3
-#define PINOUT_SWITCH(opt0, opt1, opt2, opt3, ...) (opt3) // select the fourth argument
-#endif                                                    /* ALTERNATIVE_PINOUT */
+#define PINOUT_SWITCH(opt0, opt1, opt2, opt3, ...) (opt3) // Select the fourth argument
+#endif
 
 /*
  * Important pin mappings for STM32 implementation:
  *   * JTAG/SWD
  *     * PB6 or PB5: TDI
- *     * PB7 or PB6: TDO/TRACESWO
+ *     * PB7 or PB6: TDO/SWO
  *     * PB8 or PB7: TCK/SWCLK
  *     * PB9 or PB8: TMS/SWDIO
  *     * PA6 or PB3: TRST
@@ -151,6 +158,10 @@ extern bool debug_bmp;
 #define NRST_PORT PINOUT_SWITCH(GPIOA, GPIOB)
 #define NRST_PIN  PINOUT_SWITCH(GPIO5, GPIO4)
 
+/* SWO comes in on the same pin as TDO */
+#define SWO_PORT GPIOB
+#define SWO_PIN  PINOUT_SWITCH(GPIO7, GPIO6)
+
 #define PWR_BR_PORT PINOUT_SWITCH(GPIOA, GPIOB)
 #define PWR_BR_PIN  PINOUT_SWITCH(GPIO1, GPIO9)
 
@@ -205,8 +216,10 @@ extern bool debug_bmp;
 #define USBUSART_DMA_TRG DMA_SxCR_CHSEL_4
 
 /*
- * To use USART1 as USBUSART, DMA2 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 28.
+ * To use USART1 as USBUSART, DMA2 is selected from RM0383, page 170, table 28.
  * This table defines USART1_TX as stream 7, channel 4, and USART1_RX as stream 5, channel 4.
+ * Because USART1 is on APB2 with max Pclk of 100 MHz,
+ * reachable baudrates are up to 12.5M with OVER8 or 6.25M with default OVER16 (per DS10314, page 31, table 6)
  */
 #define USBUSART1                USART1
 #define USBUSART1_CR1            USART1_CR1
@@ -227,8 +240,10 @@ extern bool debug_bmp;
 #define USBUSART1_DMA_RX_ISRx(x) dma2_stream5_isr(x)
 
 /*
- * To use USART2 as USBUSART, DMA1 is selected from https://www.st.com/resource/en/reference_manual/dm00119316-stm32f411xc-e-advanced-arm-based-32-bit-mcus-stmicroelectronics.pdf, page 170, table 27.
+ * To use USART2 as USBUSART, DMA1 is selected from RM0383, page 170, table 27.
  * This table defines USART2_TX as stream 6, channel 4, and USART2_RX as stream 5, channel 4.
+ * Because USART2 is on APB1 with max Pclk of 50 MHz,
+ * reachable baudrates are up to 6.25M with OVER8 or 3.125M with default OVER16 (per DS10314, page 31, table 6)
  */
 #define USBUSART2                USART2
 #define USBUSART2_CR1            USART2_CR1
@@ -266,17 +281,46 @@ extern bool debug_bmp;
 #define USB_ISR(x) otg_fs_isr(x)
 /*
  * Interrupt priorities. Low numbers are high priority.
- * TIM3 is used for traceswo capture and must be highest priority.
+ * TIM4 is used for traceswo capture and must be highest priority.
  */
 #define IRQ_PRI_USB          (1U << 4U)
 #define IRQ_PRI_USBUSART     (2U << 4U)
 #define IRQ_PRI_USBUSART_DMA (2U << 4U)
-#define IRQ_PRI_TRACE        (0U << 4U)
+#define IRQ_PRI_SWO_TIM      (0U << 4U)
+#define IRQ_PRI_SWO_DMA      (0U << 4U)
 
-#define TRACE_TIM          TIM3
-#define TRACE_TIM_CLK_EN() rcc_periph_clock_enable(RCC_TIM3)
-#define TRACE_IRQ          NVIC_TIM3_IRQ
-#define TRACE_ISR(x)       tim3_isr(x)
+/* Use TIM4 Input 2 (from PB7/TDO) or Input 1 (from PB6/TDO), AF2, triggered on rising edge */
+#define SWO_TIM             TIM4
+#define SWO_TIM_CLK_EN()    rcc_periph_clock_enable(RCC_TIM4)
+#define SWO_TIM_IRQ         NVIC_TIM4_IRQ
+#define SWO_TIM_ISR(x)      tim4_isr(x)
+#define SWO_IC_IN           PINOUT_SWITCH(TIM_IC_IN_TI2, TIM_IC_IN_TI1)
+#define SWO_IC_RISING       PINOUT_SWITCH(TIM_IC2, TIM_IC1)
+#define SWO_CC_RISING       PINOUT_SWITCH(TIM4_CCR2, TIM4_CCR1)
+#define SWO_ITR_RISING      PINOUT_SWITCH(TIM_DIER_CC2IE, TIM_DIER_CC1IE)
+#define SWO_STATUS_RISING   PINOUT_SWITCH(TIM_SR_CC2IF, TIM_SR_CC1IF)
+#define SWO_IC_FALLING      PINOUT_SWITCH(TIM_IC1, TIM_IC2)
+#define SWO_CC_FALLING      PINOUT_SWITCH(TIM4_CCR1, TIM4_CCR2)
+#define SWO_STATUS_FALLING  PINOUT_SWITCH(TIM_SR_CC1IF, TIM_SR_CC2IF)
+#define SWO_STATUS_OVERFLOW (TIM_SR_CC1OF | TIM_SR_CC2OF)
+#define SWO_TRIG_IN         PINOUT_SWITCH(TIM_SMCR_TS_TI2FP2, TIM_SMCR_TS_TI1FP1)
+#define SWO_TIM_PIN_AF      GPIO_AF2
+
+/* On F411 use USART1_RX mapped on PB7 for async capture */
+#define SWO_UART        USBUSART1
+#define SWO_UART_CLK    USBUSART1_CLK
+#define SWO_UART_DR     USBUSART1_DR
+#define SWO_UART_PORT   GPIOB
+#define SWO_UART_RX_PIN GPIO7
+#define SWO_UART_PIN_AF GPIO_AF7
+
+/* Bind to the same DMA Rx channel */
+#define SWO_DMA_BUS    USBUSART1_DMA_BUS
+#define SWO_DMA_CLK    USBUSART1_DMA_CLK
+#define SWO_DMA_CHAN   USBUSART1_DMA_RX_CHAN
+#define SWO_DMA_IRQ    USBUSART1_DMA_RX_IRQ
+#define SWO_DMA_ISR(x) USBUSART1_DMA_RX_ISRx(x)
+#define SWO_DMA_TRG    DMA_SxCR_CHSEL_4
 
 #define SET_RUN_STATE(state)      \
 	{                             \
@@ -293,6 +337,24 @@ extern bool debug_bmp;
 #define SET_ERROR_STATE(state)                    \
 	{                                             \
 		gpio_set_val(LED_PORT, LED_ERROR, state); \
+	}
+
+#ifdef ON_CARRIER_BOARD
+/*
+ * When the Blackpill is mounted on a carrier board with a full set of LEDs,
+ * a separate BOOTLOADER LED is available.
+ */
+#define LED_BOOT_LED      LED_BOOTLOADER
+#define BOOT_STATE_INVERT false
+#else
+#define LED_BOOT_LED      LED_IDLE_RUN
+#define BOOT_STATE_INVERT true
+#endif /* ON_CARRIER_BOARD */
+// gpio_set_val(LED_PORT, LED_BOOT_LED, BOOT_STATE_INVERT ? !(state) : (state));
+
+#define SET_BOOTLOADER_STATE(state)                                                   \
+	{                                                                                 \
+		gpio_set_val(LED_PORT, LED_BOOT_LED, BOOT_STATE_INVERT ? !(state) : (state)); \
 	}
 
 #endif /* PLATFORMS_COMMON_BLACKPILL_F4_H */

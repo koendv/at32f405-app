@@ -65,14 +65,23 @@ if probe == 'bluepill'
 	probe_stlink_args += ['-DBLUEPILL=1']
 endif
 
-probe_stlink_dependencies = [platform_common, platform_stm32f1]
+probe_stlink_dependencies = [platform_common, platform_stm32f1, platform_stm32_swo]
 
 stlink_swim_nrst_as_uart = get_option('stlink_swim_nrst_as_uart')
 
+trace_protocol = get_option('trace_protocol')
 if probe == 'stlink' and stlink_swim_nrst_as_uart
 	probe_stlink_args += ['-DSWIM_NRST_AS_UART=1']
+	probe_stlink_dependencies += platform_stm32_swo_manchester
+	probe_stlink_args += ['-DSWO_ENCODING=1']
 else
-	probe_stlink_dependencies += fixme_platform_stm32_traceswoasync
+	probe_stlink_args += [f'-DSWO_ENCODING=@trace_protocol@']
+	if trace_protocol in ['1', '3']
+		probe_stlink_dependencies += platform_stm32_swo_manchester
+	endif
+	if trace_protocol in ['2', '3']
+		probe_stlink_dependencies += platform_stm32_swo_uart
+	endif
 endif
 
 probe_host = declare_dependency(

@@ -407,7 +407,7 @@ uint32_t dap_dp_raw_access(
 {
 	const bool APnDP = addr & ADIV5_APnDP;
 	uint32_t res = 0;
-	const uint8_t reg = (addr & 0xcU) | (APnDP ? 1 : 0);
+	const uint8_t reg = (addr & 0xcU) | (APnDP ? 1U : 0U);
 	if (rnw)
 		res = dap_read_reg(target_dp, reg);
 	else
@@ -545,15 +545,15 @@ bool dap_run_cmd(const void *const request_data, const size_t request_length, vo
 	return (size_t)result >= response_length;
 }
 
-static void dap_mem_read(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t len)
+static void dap_adiv5_mem_read(adiv5_access_port_s *ap, void *dest, target_addr64_t src, size_t len)
 {
-	if (len == 0)
+	if (len == 0U)
 		return;
 	const align_e align = MIN_ALIGN(src, len);
-	DEBUG_PROBE("dap_mem_read @ %" PRIx64 " len %zu, align %d\n", src, len, align);
-	/* If the read can be done in a single transaction, use the dap_read_single() fast-path */
+	DEBUG_PROBE("%s @%08" PRIx64 "+%zu, alignment %u\n", __func__, src, len, align);
+	/* If the read can be done in a single transaction, use the dap_adiv5_mem_read_single() fast-path */
 	if ((1U << align) == len) {
-		dap_read_single(ap, dest, src, align);
+		dap_adiv5_mem_read_single(ap, dest, src, align);
 		return;
 	}
 	/* Otherwise proceed blockwise */
@@ -561,7 +561,7 @@ static void dap_mem_read(adiv5_access_port_s *ap, void *dest, target_addr64_t sr
 	uint8_t *const data = (uint8_t *)dest;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_ap_mem_access_setup(ap, src + offset, align);
+		dap_adiv5_mem_access_setup(ap, src + offset, align);
 		/*
 		 * src can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.
@@ -573,24 +573,25 @@ static void dap_mem_read(adiv5_access_port_s *ap, void *dest, target_addr64_t sr
 		for (size_t i = 0; i < blocks; i += blocks_per_transfer) {
 			/* blocks - i gives how many blocks are left to transfer in this 1024 byte chunk */
 			const size_t transfer_length = MIN(blocks - i, blocks_per_transfer) << align;
-			if (!dap_read_block(ap, data + offset, src + offset, transfer_length, align)) {
-				DEBUG_WIRE("dap_mem_read failed: %u\n", ap->dp->fault);
+			if (!dap_mem_read_block(ap, data + offset, src + offset, transfer_length, align)) {
+				DEBUG_WIRE("%s failed: %u\n", __func__, ap->dp->fault);
 				return;
 			}
 			offset += transfer_length;
 		}
 	}
-	DEBUG_WIRE("dap_mem_read transferred %zu blocks\n", len >> align);
+	DEBUG_WIRE("%s transferred %zu blocks\n", __func__, len >> align);
 }
 
-static void dap_mem_write(adiv5_access_port_s *ap, target_addr64_t dest, const void *src, size_t len, align_e align)
+static void dap_adiv5_mem_write(
+	adiv5_access_port_s *ap, target_addr64_t dest, const void *src, size_t len, align_e align)
 {
-	if (len == 0)
+	if (len == 0U)
 		return;
-	DEBUG_PROBE("dap_mem_write @ %" PRIx64 " len %zu, align %d\n", dest, len, align);
-	/* If the write can be done in a single transaction, use the dap_write_single() fast-path */
+	DEBUG_PROBE("%s @%08" PRIx64 "+%zu, alignment %u\n", __func__, dest, len, align);
+	/* If the write can be done in a single transaction, use the dap_adiv5_mem_write_single() fast-path */
 	if ((1U << align) == len) {
-		dap_write_single(ap, dest, src, align);
+		dap_adiv5_mem_write_single(ap, dest, src, align);
 		return;
 	}
 	/* Otherwise proceed blockwise */
@@ -598,7 +599,7 @@ static void dap_mem_write(adiv5_access_port_s *ap, target_addr64_t dest, const v
 	const uint8_t *const data = (const uint8_t *)src;
 	for (size_t offset = 0; offset < len;) {
 		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
-		dap_ap_mem_access_setup(ap, dest + offset, align);
+		dap_adiv5_mem_access_setup(ap, dest + offset, align);
 		/*
 		 * dest can start out unaligned to a 1024 byte chunk size,
 		 * so we have to calculate how much is left of the chunk.
@@ -610,24 +611,115 @@ static void dap_mem_write(adiv5_access_port_s *ap, target_addr64_t dest, const v
 		for (size_t i = 0; i < blocks; i += blocks_per_transfer) {
 			/* blocks - i gives how many blocks are left to transfer in this 1024 byte chunk */
 			const size_t transfer_length = MIN(blocks - i, blocks_per_transfer) << align;
-			if (!dap_write_block(ap, dest + offset, data + offset, transfer_length, align)) {
-				DEBUG_WIRE("dap_mem_write failed: %u\n", ap->dp->fault);
+			if (!dap_mem_write_block(ap, dest + offset, data + offset, transfer_length, align)) {
+				DEBUG_WIRE("%s failed: %u\n", __func__, ap->dp->fault);
 				return;
 			}
 			offset += transfer_length;
 		}
 	}
-	DEBUG_WIRE("dap_dap_mem_write transferred %zu blocks\n", len >> align);
+	DEBUG_WIRE("%s transferred %zu blocks\n", __func__, len >> align);
 
 	/* Make sure this write is complete by doing a dummy read */
 	adiv5_dp_read(ap->dp, ADIV5_DP_RDBUFF);
 }
 
+static void dap_adiv6_mem_read(
+	adiv5_access_port_s *const base_ap, void *const dest, const target_addr64_t src, const size_t len)
+{
+	if (len == 0U)
+		return;
+	adiv6_access_port_s *const ap = (adiv6_access_port_s *)base_ap;
+	const align_e align = MIN_ALIGN(src, len);
+	DEBUG_PROBE("%s @%08" PRIx64 "+%zu, alignment %u\n", __func__, src, len, align);
+	/* If the read can be done in a single transaction, use the dap_advi6_mem_read_single() fast-path */
+	if ((1U << align) == len) {
+		dap_adiv6_mem_read_single(ap, dest, src, align);
+		return;
+	}
+	/* Otherwise proceed blockwise */
+	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_READ_HDR_LEN) >> 2U;
+	uint8_t *const data = (uint8_t *)dest;
+	for (size_t offset = 0; offset < len;) {
+		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
+		dap_adiv6_mem_access_setup(ap, src + offset, align);
+		/*
+		 * src can start out unaligned to a 1024 byte chunk size,
+		 * so we have to calculate how much is left of the chunk.
+		 * We also have to take into account how much of the chunk the caller
+		 * has requested we fill.
+		 */
+		const size_t chunk_remaining = MIN(1024 - ((src + offset) & 0x3ffU), len - offset);
+		const size_t blocks = chunk_remaining >> align;
+		for (size_t i = 0; i < blocks; i += blocks_per_transfer) {
+			/* blocks - i gives how many blocks are left to transfer in this 1024 byte chunk */
+			const size_t transfer_length = MIN(blocks - i, blocks_per_transfer) << align;
+			if (!dap_mem_read_block(&ap->base, data + offset, src + offset, transfer_length, align)) {
+				DEBUG_WIRE("%s failed: %u\n", __func__, ap->base.dp->fault);
+				return;
+			}
+			offset += transfer_length;
+		}
+	}
+	DEBUG_WIRE("%s transferred %zu blocks\n", __func__, len >> align);
+}
+
+static void dap_adiv6_mem_write(
+	adiv5_access_port_s *base_ap, target_addr64_t dest, const void *src, size_t len, align_e align)
+{
+	if (len == 0U)
+		return;
+	adiv6_access_port_s *const ap = (adiv6_access_port_s *)base_ap;
+	DEBUG_PROBE("%s @%08" PRIx64 "+%zu, alignment %u\n", __func__, dest, len, align);
+	/* If the write can be done in a single transaction, use the dap_adiv5_mem_write_single() fast-path */
+	if ((1U << align) == len) {
+		dap_adiv6_mem_write_single(ap, dest, src, align);
+		return;
+	}
+	/* Otherwise proceed blockwise */
+	const size_t blocks_per_transfer = dap_max_transfer_data(DAP_CMD_BLOCK_WRITE_HDR_LEN) >> 2U;
+	const uint8_t *const data = (const uint8_t *)src;
+	for (size_t offset = 0; offset < len;) {
+		/* Setup AP_TAR every loop as failing to do so results in it wrapping */
+		dap_adiv6_mem_access_setup(ap, dest + offset, align);
+		/*
+		 * dest can start out unaligned to a 1024 byte chunk size,
+		 * so we have to calculate how much is left of the chunk.
+		 * We also have to take into account how much of the chunk the caller
+		 * has requested we fill.
+		 */
+		const size_t chunk_remaining = MIN(1024 - ((dest + offset) & 0x3ffU), len - offset);
+		const size_t blocks = chunk_remaining >> align;
+		for (size_t i = 0; i < blocks; i += blocks_per_transfer) {
+			/* blocks - i gives how many blocks are left to transfer in this 1024 byte chunk */
+			const size_t transfer_length = MIN(blocks - i, blocks_per_transfer) << align;
+			if (!dap_mem_write_block(&ap->base, dest + offset, data + offset, transfer_length, align)) {
+				DEBUG_WIRE("%s failed: %u\n", __func__, ap->base.dp->fault);
+				return;
+			}
+			offset += transfer_length;
+		}
+	}
+	DEBUG_WIRE("%s transferred %zu blocks\n", __func__, len >> align);
+
+	/* Make sure this write is complete by doing a dummy read */
+	adiv5_dp_read(ap->base.dp, ADIV5_DP_RDBUFF);
+}
+
 void dap_adiv5_dp_init(adiv5_debug_port_s *target_dp)
 {
 	/* Setup the access functions for this adaptor */
-	target_dp->ap_read = dap_ap_read;
-	target_dp->ap_write = dap_ap_write;
-	target_dp->mem_read = dap_mem_read;
-	target_dp->mem_write = dap_mem_write;
+	target_dp->ap_read = dap_adiv5_ap_read;
+	target_dp->ap_write = dap_adiv5_ap_write;
+	target_dp->mem_read = dap_adiv5_mem_read;
+	target_dp->mem_write = dap_adiv5_mem_write;
+}
+
+void dap_adiv6_dp_init(adiv5_debug_port_s *target_dp)
+{
+	/* Setup the access functions for this adaptor */
+	target_dp->ap_read = dap_adiv6_ap_read;
+	target_dp->ap_write = dap_adiv6_ap_write;
+	target_dp->mem_read = dap_adiv6_mem_read;
+	target_dp->mem_write = dap_adiv6_mem_write;
 }
