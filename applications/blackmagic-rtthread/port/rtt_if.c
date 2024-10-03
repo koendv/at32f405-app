@@ -31,9 +31,6 @@
 
 #include "usb_cdc.h"
 
-#include "gdb_if.h"
-#include "gdb_packet.h"
-
 /*********************************************************************
 *
 *       rtt terminal i/o
@@ -45,21 +42,19 @@
 int32_t rtt_getchar(const uint32_t channel)
 {
 	char ch;
-	// XXXif (rt_mq_recv(cdc1_rx_mq, &ch, 1, 0) == 1)
-	// XXX	return ch;
-	return -1;
+	rt_ringbuffer_getchar(&cdc1_read_rb, &ch);
+	return ch;
 }
 
 /* rtt host to target: true if no characters available for reading */
 bool rtt_nodata(const uint32_t channel)
 {
-	// return (cdc1_rx_mq->entry == 0);
-	return true;
+	return rt_ringbuffer_data_len(&cdc1_read_rb) != 0;
 }
 
 /* rtt target to host: write string */
 uint32_t rtt_write(const uint32_t channel, const char *buf, uint32_t len)
 {
-	cdc1_acm_data_send((uint8_t *)buf, len);
+	cdc1_write((uint8_t *)buf, len);
 	return len;
 }

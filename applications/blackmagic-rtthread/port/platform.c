@@ -137,7 +137,13 @@ uint8_t platform_spi_xfer(const spi_bus_e bus, const uint8_t value)
 
 void debug_serial_send_stdout(const uint8_t *const data, const size_t len)
 {
-	cdc1_acm_data_send((uint8_t *)data, len);
+	cdc1_write((uint8_t *)data, len);
+}
+
+size_t debug_serial_debug_write(const char *buf, const size_t len)
+{
+	cdc1_write((uint8_t *)buf, len);
+	return len;
 }
 
 void vtarget(int argc, char **argv)
