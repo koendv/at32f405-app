@@ -26,18 +26,12 @@ int main(void)
     rt_kprintf("boot\r\n");
     //ds3231_sync();
     app_sdcard_init();
-    //app_blackmagic_init();
+    app_blackmagic_init();
 
     while (1)
     {
         rt_pin_write(LED1_PIN, PIN_LOW);
         rt_thread_mdelay(500);
-#if 0
-        static uint32_t n = 0;
-        snprintf(buf, sizeof(buf), "%d ", n++);
-        cdc0_acm_data_send(buf, strlen(buf));
-        if (rt_mq_recv(cdc0_rx_mq, &ch, sizeof(ch), 100) == 1) rt_kprintf("ch: %c\r\n", ch);
-#endif
         rt_pin_write(LED1_PIN, PIN_HIGH);
         rt_thread_mdelay(4500);
     }
