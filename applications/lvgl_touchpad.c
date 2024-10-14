@@ -186,6 +186,16 @@ static void cst816t_thread()
     }
 }
 
+/* switch continuous tracking on/off for scrolling */
+
+void touchpad_continuous(rt_bool_t left_right, rt_bool_t up_down)
+{
+    rt_uint8_t motion_mask = MOTION_MASK_DOUBLE_CLICK;
+    if (left_right) motion_mask |= MOTION_MASK_CONTINUOUS_LEFT_RIGHT;
+    if (up_down) motion_mask |= MOTION_MASK_CONTINUOUS_UP_DOWN;
+    cst816x_write(REG_MOTION_MASK, motion_mask);
+}
+
 /* read clicks and swipes from queue and send lvgl events */
 void touchpad_events()
 {
