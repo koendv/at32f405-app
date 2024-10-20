@@ -37,7 +37,6 @@
 #include "semihosting.h"
 #include "command.h"
 #include "crc32.h"
-#include "morse.h"
 #ifdef ENABLE_RTT
 #include "rtt.h"
 #endif
@@ -333,7 +332,7 @@ int32_t gdb_main_loop(target_controller_s *tc, char *pbuf, size_t pbuf_size, siz
 		else if (last_target) {
 			cur_target = target_attach(last_target, &gdb_controller);
 			if (cur_target)
-				morse(NULL, false);
+				display_target_name();
 			target_reset(cur_target);
 		}
 		break;
@@ -618,7 +617,7 @@ static void exec_v_attach(const char *packet, const size_t length)
 		/* Attach to remote target processor */
 		cur_target = target_attach_n(addr, &gdb_controller);
 		if (cur_target) {
-			morse(NULL, false);
+			display_target_name();
 			/*
 			 * We don't actually support threads, but GDB 11 and 12 can't work without
 			 * us saying we attached to thread 1.. see the following for the low-down of this:
@@ -702,7 +701,7 @@ static void exec_v_run(const char *packet, const size_t length)
 		if (cur_target) {
 			target_set_cmdline(cur_target, cmdline, offset);
 			target_reset(cur_target);
-			morse(NULL, false);
+			display_target_name();
 			gdb_putpacketz("T05");
 		} else
 			gdb_putpacketz("E01");
@@ -915,7 +914,7 @@ void gdb_poll_target(void)
 	switch (reason) {
 	case TARGET_HALT_ERROR:
 		gdb_putpacket_f("X%02X", GDB_SIGLOST);
-		morse("TARGET LOST.", true);
+		display_target_name();
 		break;
 	case TARGET_HALT_REQUEST:
 		gdb_putpacket_f("T%02X", GDB_SIGINT);

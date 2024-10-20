@@ -11,6 +11,12 @@ lv_obj_t *progress_bar   = NULL;
 uint32_t  cnt            = 1;
 uint32_t  current_tile   = 0;
 
+void set_target_text(const char *txt)
+{
+    if (target_txt && txt)
+        lv_label_set_text(target_txt, txt);
+}
+
 static void scr_gesture_cb(lv_event_t *e)
 {
     lv_dir_t dir = lv_indev_get_gesture_dir(lv_indev_get_act());

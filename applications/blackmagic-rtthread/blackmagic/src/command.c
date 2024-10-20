@@ -32,7 +32,6 @@
 #include "gdb_packet.h"
 #include "target.h"
 #include "target_internal.h"
-#include "morse.h"
 #include "version.h"
 #include "jtagtap.h"
 
@@ -59,7 +58,6 @@ static bool cmd_swd_scan(target_s *target, int argc, const char **argv);
 static bool cmd_auto_scan(target_s *t, int argc, const char **argv);
 static bool cmd_frequency(target_s *t, int argc, const char **argv);
 static bool cmd_targets(target_s *t, int argc, const char **argv);
-static bool cmd_morse(target_s *t, int argc, const char **argv);
 static bool cmd_halt_timeout(target_s *t, int argc, const char **argv);
 static bool cmd_connect_reset(target_s *t, int argc, const char **argv);
 static bool cmd_reset(target_s *t, int argc, const char **argv);
@@ -94,7 +92,6 @@ const command_s cmd_list[] = {
 	{"auto_scan", cmd_auto_scan, "Automatically scan all chain types for devices"},
 	{"frequency", cmd_frequency, "set minimum high and low times: [FREQ]"},
 	{"targets", cmd_targets, "Display list of available targets"},
-	{"morse", cmd_morse, "Display morse error message"},
 	{"halt_timeout", cmd_halt_timeout, "Timeout to wait until Cortex-M is halted: [TIMEOUT, default 2000ms]"},
 	{"connect_rst", cmd_connect_reset, "Configure connect under reset: [enable|disable]"},
 	{"reset", cmd_reset, "Pulse the nRST line - disconnects target: [PULSE_LEN, default 0ms]"},
@@ -262,7 +259,7 @@ static bool cmd_jtag_scan(target_s *target, int argc, const char **argv)
 
 	cmd_targets(NULL, 0, NULL);
 	platform_target_clk_output_enable(false);
-	morse(NULL, false);
+	display_target_name();
 	return true;
 }
 
@@ -303,7 +300,7 @@ bool cmd_swd_scan(target_s *target, int argc, const char **argv)
 
 	cmd_targets(NULL, 0, NULL);
 	platform_target_clk_output_enable(false);
-	morse(NULL, false);
+	display_target_name();
 	return true;
 }
 
@@ -355,7 +352,7 @@ bool cmd_auto_scan(target_s *t, int argc, const char **argv)
 
 	cmd_targets(NULL, 0, NULL);
 	platform_target_clk_output_enable(false);
-	morse(NULL, false);
+	display_target_name();
 	return true;
 }
 
@@ -411,19 +408,6 @@ bool cmd_targets(target_s *target, int argc, const char **argv)
 		return false;
 	}
 
-	return true;
-}
-
-bool cmd_morse(target_s *t, int argc, const char **argv)
-{
-	(void)t;
-	(void)argc;
-	(void)argv;
-	if (morse_msg) {
-		gdb_outf("%s\n", morse_msg);
-		DEBUG_WARN("%s\n", morse_msg);
-	} else
-		gdb_out("No message\n");
 	return true;
 }
 

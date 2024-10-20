@@ -92,4 +92,7 @@ extern bool running_status;
 #define gpio_set_val(port, pin, value) rt_pin_write(pin, value ? PIN_HIGH : PIN_LOW)
 #define gpio_get(port, pin)            rt_pin_read(pin)
 
+/* display */
+extern void display_target_name(void);
+
 #endif
