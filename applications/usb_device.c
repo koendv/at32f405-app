@@ -12,21 +12,22 @@
 
 void usb_dc_low_level_init(void)
 {
-    at32_msp_usb_init(NULL);
-    crm_periph_clock_enable(CRM_OTGHS_PERIPH_CLOCK, TRUE);
-    nvic_irq_enable(OTGHS_IRQn, 0, 0);
+	at32_msp_usb_init(NULL);
+	crm_periph_clock_enable(CRM_OTGHS_PERIPH_CLOCK, TRUE);
+	nvic_irq_enable(OTGHS_IRQn, 0, 0);
 }
 
 void OTGHS_IRQHandler(void)
 {
-    extern void USBD_IRQHandler(uint8_t busid);
-    USBD_IRQHandler(0);
+	extern void USBD_IRQHandler(uint8_t busid);
+	USBD_IRQHandler(0);
 }
 
 int app_usbd_init(void)
 {
-    cdc_acm_msc_init(0, OTGHS_BASE);
-    return 0;
+	cdc_init();
+	cdc_acm_msc_init(0, OTGHS_BASE);
+	return 0;
 }
 
 INIT_APP_EXPORT(app_usbd_init);
