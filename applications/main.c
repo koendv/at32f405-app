@@ -18,9 +18,6 @@
 #include "app.h"
 #include "ds3231_util.h"
 
-uint8_t buf[128];
-uint8_t ch;
-
 int main(void)
 {
     rt_kprintf("boot\r\n");
