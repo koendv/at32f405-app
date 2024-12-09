@@ -120,6 +120,9 @@
 #define RT_USING_SERIAL_V1
 #define RT_SERIAL_USING_DMA
 #define RT_SERIAL_RB_BUFSZ 64
+#define RT_USING_CAN
+#define RT_CAN_USING_HDR
+#define RT_CAN_USING_CANFD
 #define RT_USING_I2C
 #define RT_USING_ADC
 #define RT_USING_PWM
@@ -403,6 +406,8 @@
 #define BSP_USING_HARD_I2C1
 #define BSP_USING_ADC
 #define BSP_USING_ADC1
+#define BSP_USING_CAN
+#define BSP_USING_CAN1
 /* end of On-chip Peripheral Drivers */
 /* end of Hardware Drivers Config */
 #define PKG_USING_BLACKMAGIC
