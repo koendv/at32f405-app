@@ -76,7 +76,7 @@ Set up the source tree.
 ```sh
 git clone https://github.com/RT-Thread/rt-thread
 cd rt-thread/
-git checkout fd3f603b2709df86ad6b14dce385975460f7334e
+git checkout ebe2926cd610661e210b70be1a22bac13923f4fb
 cd bsp/at32/
 git clone https://github.com/koendv/at32f405-app/
 cd at32f405-app
@@ -89,6 +89,7 @@ cd ../../../../..
 patch -p1 < bsp/at32/at32f405-app/patches/usb_dc_dwc2.patch
 patch -p1 < bsp/at32/at32f405-app/patches/drv_hard_i2c.patch
 patch -p1 < bsp/at32/at32f405-app/patches/drv_spi.patch
+patch -p1 < bsp/at32/at32f405-app/patches/at32f402_405_can.patch
 ```
 ### compiling
 Set up the [xpack](https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/tag/v12.3.1-1.2) arm-none-eabi-gcc compiler.
@@ -160,5 +161,6 @@ No. Att Driver
 - [P169H002](https://aliexpress.com/wholesale?SearchText=P169H002&sortType=total_tranpro_desc) capacitive touch screen
 - [easyeda](https://easyeda.com/) CAD software
 - [LCSC](https://www.lcsc.com/) and [SZLCSC](https://www.szlcsc.com/) electronics components
+- [jlcdfm](https://jlcdfm.com/) design for manufacturing
 - [jlcpcb](https://jlcpcb.com/) pcb assembly and 3D printing
 - [oshwlab](https://oshwlab.com) and [oshwhub](https://oshwhub.com/) open hardware projects

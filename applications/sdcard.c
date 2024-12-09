@@ -1,7 +1,7 @@
 #include <stdbool.h>
 #include <rtdevice.h>
 #include <drv_spi.h>
-#include <spi_msd.h>
+#include <dev_spi_msd.h>
 #include <dfs_fs.h>
 #include "board.h"
 #include "pinout.h"
