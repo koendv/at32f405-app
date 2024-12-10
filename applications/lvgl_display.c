@@ -15,13 +15,18 @@
 
 /* https://github.com/lvgl/lvgl/blob/master/docs/integration/driver/display/gen_mipi.rst */
 
-#define LCD_H_RES     240
-#define LCD_V_RES     280
-#define LCD_BUF_LINES 12
+#define LCD_H_RES        240
+#define LCD_V_RES        280
+#define LCD_BUF_LINES    12
+#define SPI_BUS          "spi3"
+#define SPI_DEV          "spi30"
+#define DISP_CS_GPIO     GPIOD
+#define DISP_CS_GPIO_PIN GPIO_PINS_2
 
-static lv_display_t *lcd_disp = RT_NULL;
-static uint8_t      *buf1     = RT_NULL;
-static uint8_t      *buf2     = RT_NULL;
+static lv_display_t *lcd_disp       = RT_NULL;
+static uint8_t      *buf1           = RT_NULL;
+static uint8_t      *buf2           = RT_NULL;
+bool                 lvgl_init_done = FALSE;
 
 static int32_t lcd_io_init(void);
 static void    lcd_send_cmd(lv_display_t *disp, const uint8_t *cmd, size_t cmd_size, const uint8_t *param, size_t param_size);
@@ -67,10 +72,15 @@ void lv_port_disp_init()
     buf1 = lv_malloc(buf_size);
     LV_ASSERT_MALLOC(buf1);
 
+#if 1
+    // faster, but uses more memory
     buf2 = lv_malloc(buf_size);
     LV_ASSERT_MALLOC(buf2);
+#endif
 
     lv_display_set_buffers(lcd_disp, buf1, buf2, buf_size, LV_DISPLAY_RENDER_MODE_PARTIAL);
+
+    lvgl_init_done = TRUE;
 }
 
 void lv_user_gui_init()
@@ -81,7 +91,6 @@ void lv_user_gui_init()
 
 /*************************************************************************/
 
-#define SPI_DEV "spi30"
 static struct rt_spi_device       *spi_dev = RT_NULL;
 static struct rt_spi_configuration spi_cfg_8bit;
 static struct rt_spi_configuration spi_cfg_16bit;
@@ -101,7 +110,7 @@ static int32_t lcd_io_init(void)
     at32_msp_spi_init(SPI3);
 
     // XXX hardcoded: pin D2 is DISP_CS_PIN
-    rt_hw_spi_device_attach("spi3", SPI_DEV, GPIOD, GPIO_PINS_2);
+    rt_hw_spi_device_attach(SPI_BUS, SPI_DEV, DISP_CS_GPIO, DISP_CS_GPIO_PIN);
 
     spi_cfg_8bit.data_width = 8;
     spi_cfg_8bit.mode       = RT_SPI_MASTER | RT_SPI_MODE_0 | RT_SPI_MSB;
@@ -114,7 +123,7 @@ static int32_t lcd_io_init(void)
     spi_dev = (struct rt_spi_device *)rt_device_find(SPI_DEV);
     if (spi_dev == RT_NULL)
     {
-        rt_kprintf("spi3 abort\r\n");
+        rt_kprintf("spi abort\r\n");
         return -RT_ERROR;
     }
     rt_spi_configure(spi_dev, &spi_cfg_8bit);
