@@ -1,22 +1,35 @@
+/*
+ * set lcd brightness according to ambient light
+ *
+ * - read the voltage of the ambient light sensor using ADC
+ * - set the PWM of the LCD backlight LED
+ * - to avoid flickering, update PWM duty cycle when new duty cycle begins
+ *
+ * XXX This code will probably need cleanup when rt-thread upgrades.
+ */
+
 #include <rtthread.h>
 #include <rtdevice.h>
 #include "drv_common.h"
 #include "drv_gpio.h"
+#ifdef PKG_USING_LVGL
 #include "lvgl.h"
+#endif
 
 #include "pinout.h"
 
-#define ADC_DEV_NAME        "adc1" /* ADC device name */
-#define ADC_LIGHT_CHANNEL   10     /* ADC light sensor channel */
-#define ADC_VIO_CHANNEL     13     /* ADC target volyage channel */
-#define ADC_REF_VOLTAGE     3300   /* ADC reference voltage 3.3V in millivolts */
-#define ADC_CONVERT_BITS    12     /* ADC value 0 .. 4096 */
-#define PWM_DEV_NAME        "pwm1" /* PWM device name */
-#define PWM_DISPLAY_CHANNEL 1      /* PWM channel of display led */
-#define PWM_PERIOD_BITS     23     /* PWM period is 1 << 23 nanoseconds or 0.008 seconds */
-#define UPDATE_DELAY        497    /* delay in ms between brightness updates */
-#define LOWPASS_BETA        3      /* brightness lowpass filter, larger is slower */
-#define SLEEP_TIME          300    /* seconds of inactivity before screen blanking */
+#define ADC_DEV_NAME        "adc1"               /* ADC device name */
+#define ADC_LIGHT_CHANNEL   10                   /* ADC light sensor channel */
+#define ADC_VIO_CHANNEL     13                   /* ADC target voltage channel */
+#define ADC_REF_VOLTAGE     3300                 /* ADC reference voltage 3.3V in millivolts */
+#define ADC_CONVERT_BITS    12                   /* ADC value 0 .. 4096 */
+#define TMR_NUMBER          TMR1                 /* timer number */
+#define TMR_CHANNEL         TMR_SELECT_CHANNEL_1 /* timer channel */
+#define PWM_DEV_NAME        "pwm1"               /* PWM device name */
+#define PWM_DISPLAY_CHANNEL 1                    /* PWM channel of display led */
+#define UPDATE_DELAY        497                  /* delay in ms between brightness updates */
+#define LOWPASS_BETA        3                    /* brightness lowpass filter, larger is slower */
+#define SLEEP_TIME          300                  /* seconds of inactivity before screen blanking */
 
 /*
  * CONFIG_RT_USING_ADC=y
@@ -41,7 +54,7 @@ void adc_read_func()
 {
     rt_adc_device_t       adc_dev;
     struct rt_device_pwm *pwm_dev; /* PWM device handle */
-    rt_uint32_t           pwm_period = 1;
+    const rt_uint32_t     pwm_period = 65535;
     rt_uint32_t           pwm_duty_cycle;
     rt_uint32_t           light_sensor;
 
@@ -61,6 +74,9 @@ void adc_read_func()
     brightness = rt_adc_read(adc_dev, ADC_LIGHT_CHANNEL);
 
     /* display led pwm */
+    at32_msp_tmr_init(TMR_NUMBER); /* at32 workbench code */
+
+    /* display led pwm */
     pwm_dev = (struct rt_device_pwm *)rt_device_find(PWM_DEV_NAME);
     if (pwm_dev == RT_NULL)
     {
@@ -69,10 +85,10 @@ void adc_read_func()
     }
     rt_pwm_set(pwm_dev, PWM_DISPLAY_CHANNEL, pwm_period, 0);
     rt_pwm_enable(pwm_dev, PWM_DISPLAY_CHANNEL);
-
-    pwm_period = tmr_period_value_get(TMR1);
-    // to avoid flickering, update pwm duty cycle when new duty cycle begins
-    tmr_output_channel_buffer_enable(TMR1, TMR_SELECT_CHANNEL_1, TRUE);
+#ifdef PKG_USING_LVGL
+    while (lv_disp_get_default() == NULL)
+        rt_thread_mdelay(UPDATE_DELAY);
+#endif
 
     while (1)
     {
@@ -85,17 +101,20 @@ void adc_read_func()
         brightness >>= LOWPASS_BETA;
 
         /* scale brightness to pwm range */
-        pwm_duty_cycle = brightness * pwm_period / 4095;
+        pwm_duty_cycle = pwm_period * brightness / 4096;
         if (pwm_duty_cycle > pwm_period) pwm_duty_cycle = pwm_period;
 
-        /* sleeping */
+#ifdef PKG_USING_LVGL
+        /* switch off display if inactive */
         if (lv_disp_get_inactive_time(NULL) > SLEEP_TIME * RT_TICK_PER_SECOND) pwm_duty_cycle = 0;
+#endif
 
-        /* set pwm duty cycle */
-        tmr_channel_value_set(TMR1, TMR_SELECT_CHANNEL_1, pwm_duty_cycle);
-        rt_pwm_set(pwm_dev, PWM_DISPLAY_CHANNEL, pwm_period, pwm_duty_cycle);
-        rt_pwm_enable(pwm_dev, PWM_DISPLAY_CHANNEL); // XXX ought not to be necessary
-        rt_thread_mdelay(UPDATE_DELAY);              // update twice per second
+            /* set pwm duty cycle */
+#if 0
+        rt_kprintf("led %d/%d\r\n", pwm_duty_cycle, pwm_period);
+#endif
+        tmr_channel_value_set(TMR_NUMBER, TMR_CHANNEL, pwm_duty_cycle);
+        rt_thread_mdelay(UPDATE_DELAY); // update twice per second
     }
 }
 
