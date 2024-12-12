@@ -42,13 +42,6 @@ if PKG_USING_BLACKMAGIC
         help
             optional rtt secret. '%' is converted to ' ' space.
 
-    config BLACKMAGIC_ENABLE_MEMWATCH
-        bool "memwatch support"
-        default y
-        help
-            memwatch reads target memory while the target is running.
-            Inspecting memory without halting the target is useful when debugging hard real time systems.
-
     config BLACKMAGIC_ENABLE_DEBUG
         bool "debug output"
         default n
