@@ -1,7 +1,5 @@
 #ifndef GDB_TASK_H
 
-extern bool cdc0_dtr;
-void take_target(void);
-void release_target(void);
+int app_blackmagic_init(void);
 
 #endif

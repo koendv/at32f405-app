@@ -26,26 +26,16 @@
 #include "exception.h"
 #include "gdb_packet.h"
 #include "memwatch.h"
+#include "usb_cdc.h"
 #ifdef ENABLE_RTT
 #include "rtt.h"
 #endif
 
+// don't kill target by polling too much
+#define POLLS_PER_SECOND 50
+#define POLL_TICKS       (RT_TICK_PER_SECOND / POLLS_PER_SECOND)
+
 static rt_thread_t gdb_server_thread = RT_NULL;
-static rt_thread_t gdb_poll_thread = RT_NULL;
-static rt_sem_t target_access_sem = RT_NULL;
-static rt_sem_t target_poll_sem = RT_NULL;
-
-/* semaphore to guard target */
-
-void take_target()
-{
-	rt_sem_take(target_access_sem, RT_WAITING_FOREVER);
-}
-
-void release_target()
-{
-	rt_sem_release(target_access_sem);
-}
 
 /* pbuf below is now only used by the remote protocol remote.c */
 
@@ -57,15 +47,49 @@ char *gdb_packet_buffer()
 	return pbuf;
 }
 
-void gdb_server()
+static void bmp_poll_loop(void)
 {
+	rt_tick_t tick_start, tick_stop;
+	SET_IDLE_STATE(false);
+	while (gdb_target_running && cur_target) {
+		tick_start = rt_tick_get();
+		gdb_poll_target();
+		// Check again, as `gdb_poll_target()` may
+		// alter these variables.
+		if (!gdb_target_running || !cur_target)
+			break;
+		char c = gdb_if_getchar_to(0);
+		if (c == '\x03' || c == '\x04')
+			target_halt_request(cur_target);
+		// pacing
+		tick_stop = rt_tick_get();
+		if (tick_stop - tick_start > POLL_TICKS)
+			rt_thread_delay(POLL_TICKS + tick_start - tick_stop);
+#ifdef ENABLE_RTT
+		if (rtt_enabled)
+			poll_rtt(cur_target);
+#endif
+		if (memwatch_cnt != 0)
+			poll_memwatch(cur_target);
+	}
+
+	SET_IDLE_STATE(true);
+	size_t size = gdb_getpacket(pbuf, GDB_PACKET_BUFFER_SIZE);
+	// If port closed and target detached, stay idle
+	if (pbuf[0] != '\x04' || cur_target)
+		SET_IDLE_STATE(false);
+	gdb_main(pbuf, GDB_PACKET_BUFFER_SIZE, size);
+}
+
+void gdb_server_task()
+{
+	platform_init();
 	while (1) {
-		size_t size = gdb_getpacket(pbuf, GDB_PACKET_BUFFER_SIZE);
-		take_target();
-		SET_IDLE_STATE(0);
+		cdc0_wait_for_dtr();
 		TRY(EXCEPTION_ALL)
 		{
-			gdb_main(pbuf, GDB_PACKET_BUFFER_SIZE, size);
+			while (cdc0_connected())
+				bmp_poll_loop();
 		}
 		CATCH()
 		{
@@ -73,62 +97,12 @@ void gdb_server()
 			gdb_putpacketz("EFF");
 			target_list_free();
 		}
-		SET_IDLE_STATE(1);
-		if (gdb_target_running && cur_target)
-			rt_sem_release(target_poll_sem); // start polling
-		if (cdc0_dtr)                        // if !cdc0_dtr wait for cdc0_dtr(true)
-			release_target();
-	}
-}
-
-void gdb_poll()
-{
-	while (1) {
-		// wait for gdb "run" or "continue" command
-		rt_sem_take(target_poll_sem, RT_WAITING_FOREVER);
-		while (gdb_target_running && cur_target) {
-			take_target();
-			SET_IDLE_STATE(0);
-			TRY(EXCEPTION_ALL)
-			{
-				gdb_poll_target();
-				// Check again, as `gdb_poll_target()` may
-				// alter these variables.
-				if (!gdb_target_running || !cur_target)
-					break;
-#ifdef ENABLE_RTT
-				if (rtt_enabled)
-					poll_rtt(cur_target);
-#endif
-				if (memwatch_cnt != 0)
-					poll_memwatch(cur_target);
-			}
-			CATCH()
-			{
-			default:
-				gdb_putpacketz("EFF");
-				target_list_free();
-			}
-			SET_IDLE_STATE(1);
-			release_target();
-			rt_thread_mdelay(8);
-		}
 	}
 }
 
 int app_blackmagic_init(void)
 {
-	target_access_sem = rt_sem_create("gdb target", 0, RT_IPC_FLAG_FIFO);
-	rt_sem_control(target_access_sem, RT_IPC_CMD_SET_VLIMIT, (void *)1);
-
-	target_poll_sem = rt_sem_create("gdb poll", 0, RT_IPC_FLAG_FIFO);
-	rt_sem_control(target_poll_sem, RT_IPC_CMD_SET_VLIMIT, (void *)1);
-
-	gdb_server_thread = rt_thread_create("gdb server", gdb_server, RT_NULL, 8192, 4, 10);
+	gdb_server_thread = rt_thread_create("gdb server", gdb_server_task, RT_NULL, 8192, 4, 10);
 	if (gdb_server_thread != RT_NULL)
 		rt_thread_startup(gdb_server_thread);
-
-	gdb_poll_thread = rt_thread_create("gdb poll", gdb_poll, RT_NULL, 4096, 4, 10);
-	if (gdb_poll_thread != RT_NULL)
-		rt_thread_startup(gdb_poll_thread);
 }
