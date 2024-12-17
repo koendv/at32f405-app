@@ -411,14 +411,9 @@
 /* end of On-chip Peripheral Drivers */
 /* end of Hardware Drivers Config */
 #define PKG_USING_BLACKMAGIC
-
-/* Timing */
-
-#define BLACKMAGIC_DELAY_CONSTANT 10000
-#define BLACKMAGIC_FASTCLOCK 2500000
-/* end of Timing */
 #define BLACKMAGIC_ENABLE_RTT
-#define BLACKMAGIC_ENABLE_MEMWATCH
 #define BLACKMAGIC_ENABLE_NO_ACK_MODE
+#define PKG_USING_BLACKMAGIC_V110
+#define BLACKMAGIC_VERSION "v1.10.2-0"
 
 #endif

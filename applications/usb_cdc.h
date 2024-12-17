@@ -6,16 +6,17 @@
 
 void cdc_init();
 
-bool cdc0_connected();
 void cdc0_wait_for_dtr();
+bool cdc0_connected();
+bool cdc0_recv_empty();
 char cdc0_getchar_timeout(uint32_t timeout_ticks);
 void cdc0_write(uint8_t *buf, uint32_t nbytes);
 
 void cdc1_wait_for_dtr();
-void cdc1_wait_for_char();
 bool cdc1_connected();
+void cdc1_wait_for_char();
+bool cdc1_recv_empty();
 char cdc1_getchar();
-bool cdc1_nodata();
 void cdc1_write(uint8_t *buf, uint32_t nbytes);
 
 #endif

@@ -22,6 +22,8 @@
 #define DBG_TAG "CAN"
 #define DBG_LVL DBG_INFO
 #include <rtdbg.h>
+#include <usb_cdc.h>
+#include <string.h>
 
 #define CAN_DEV   "can1"
 #define SLCAN_MTU (sizeof("T1111222281122334455667788EA5F\r") + 1)
@@ -119,7 +121,8 @@ static void can_rx_thread(void *param)
         rt_sem_take(can_rx_sem, RT_WAITING_FOREVER);
         rt_device_read(can_dev, 0, &rx_msg, sizeof(rx_msg));
         can2ascii(&rx_msg, char_tx_buffer, RT_FALSE);
-        rt_kprintf("%s", char_tx_buffer);
+        //rt_kprintf("%s", char_tx_buffer);
+        cdc1_write(char_tx_buffer, strlen(char_tx_buffer));
     }
 }
 

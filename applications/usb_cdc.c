@@ -205,7 +205,7 @@ char cdc0_getchar_timeout(uint32_t timeout_ticks)
     return -1;
 }
 
-bool cdc0_nodata()
+bool cdc0_recv_empty()
 {
     return rt_ringbuffer_data_len(&cdc0_read_rb) == 0;
 }
@@ -243,7 +243,7 @@ char cdc1_getchar()
         return -1;
 }
 
-bool cdc1_nodata()
+bool cdc1_recv_empty()
 {
     return rt_ringbuffer_data_len(&cdc1_read_rb) == 0;
 }

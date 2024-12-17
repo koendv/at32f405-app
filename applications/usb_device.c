@@ -3,6 +3,7 @@
 #include "at32f402_405.h"
 #include "at32_msp.h"
 #include "usb_desc.h"
+#include "usb_cdc.h"
 
 /*
  for at32 high-speed usb

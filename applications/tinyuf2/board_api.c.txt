@@ -1,1 +1,0 @@
-board_api.c is in applications/blackmagic-rtthread/port/board_api.c

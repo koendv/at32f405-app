@@ -1,0 +1,3 @@
+[submodule "applications/blackmagic-rtthread"]
+	path = applications/blackmagic-rtthread
+	url = https://github.com/koendv/blackmagic-rtthread

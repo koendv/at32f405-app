@@ -78,7 +78,7 @@ git clone https://github.com/RT-Thread/rt-thread
 cd rt-thread/
 git checkout ebe2926cd610661e210b70be1a22bac13923f4fb
 cd bsp/at32/
-git clone https://github.com/koendv/at32f405-app/
+git clone --recursive https://github.com/koendv/at32f405-app/
 cd at32f405-app
 pkgs --update
 cd packages/LVGL-v9.1.0/
