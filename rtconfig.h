@@ -259,6 +259,10 @@
 #define PKG_CMBACKTRACE_PRINT_ENGLISH
 #define PKG_USING_CMBACKTRACE_LATEST_VERSION
 #define PKG_CMBACKTRACE_VER_NUM 0x99999
+#define PKG_USING_BLACKMAGIC
+#define BLACKMAGIC_ENABLE_RTT
+#define PKG_USING_BLACKMAGIC_LATEST_VERSION
+#define BLACKMAGIC_VERSION "latest"
 /* end of tools packages */
 
 /* system packages */
@@ -410,10 +414,5 @@
 #define BSP_USING_CAN1
 /* end of On-chip Peripheral Drivers */
 /* end of Hardware Drivers Config */
-#define PKG_USING_BLACKMAGIC
-#define BLACKMAGIC_ENABLE_RTT
-#define BLACKMAGIC_ENABLE_NO_ACK_MODE
-#define PKG_USING_BLACKMAGIC_V110
-#define BLACKMAGIC_VERSION "v1.10.2-0"
 
 #endif
