@@ -102,7 +102,7 @@ openocd -f interface/cmsis-dap.cfg -f target/at32f402xx.cfg
 
 ### black magic probe
 
-Using [black magic probe](https://black-magic.org/index.html). First [add support for AT32F405](applications/blackmagic-rtthread/patches/at32f405.patch). Compile and install the firmware. Connect black magic probe to the AT32F405 SWD port. Command line:
+Using [black magic probe](https://black-magic.org/index.html). First [add support for AT32F405](https://github.com/koendv/blackmagic-rtthread/blob/main/patches/at32f405.patch). Compile and install the firmware. Connect black magic probe to the AT32F405 SWD port. Command line:
 
 ```sh
 $ arm-none-eabi-gdb -q
