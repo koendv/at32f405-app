@@ -135,7 +135,7 @@ void usbd_cdc1_acm_bulk_in(uint8_t busid, uint8_t ep, uint32_t nbytes)
 
 void cdc1_write(uint8_t *buf, uint32_t nbytes)
 {
-    if (!(cdc_is_configured && cdc0_dtr)) return;
+    if (!(cdc_is_configured && cdc1_dtr)) return;
     // wait until usb transmit available
     rt_sem_take(ep_write_sem, RT_WAITING_FOREVER);
     usbd_ep_start_write(BUSID0, CDC1_IN_EP, buf, nbytes);
