@@ -224,6 +224,7 @@
 /* (5 * number of control endpoints + 8) + ((largest USB packet used / 4) + 1 for
  * status information) + (2 * number of OUT endpoints) + 1 for Global NAK
  */
+// XXX needs optimizing
 #define CONFIG_USB_DWC2_RXALL_FIFO_SIZE (1024 / 4)
 /* IN Endpoints Max packet Size / 4 */
 #define CONFIG_USB_DWC2_TX0_FIFO_SIZE (512 / 4)
