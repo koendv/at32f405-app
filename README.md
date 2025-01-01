@@ -49,7 +49,6 @@ The application is made of several open source projects.
 
 - [free-dap](https://github.com/ataradov/free-dap) debugger probe, for use with openocd
 - [Black Magic Debug](https://github.com/blackmagic-debug/blackmagic), for use with gdb or standalone
-- [tinyuf2](https://github.com/adafruit/tinyuf2) uf2 loader
 - [CherryUSB](https://github.com/cherry-embedded/CherryUSB) usb protocol stack
 - [CherryDAP](https://github.com/cherry-embedded/CherryDAP) winusb descriptors
 - [RT-Thread](https://github.com/RT-Thread/rt-thread) operating system
@@ -58,8 +57,7 @@ The high-speed usb has different interfaces:
 
 - bulk usb for CMSIS-DAP
 - cdc serial for Black Magic Debug
-- cdc serial for UART
-- usb mass storage device for UF2
+- cdc serial for UART and RTT
 
 ## display
 
