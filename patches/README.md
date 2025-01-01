@@ -25,3 +25,7 @@
 - usb_dc_dwc2.patch
 
     CherryUSB uses SystemCoreClock. at32 uses system_core_clock
+
+- dma_config.patch
+
+    Add dma channel for uart2

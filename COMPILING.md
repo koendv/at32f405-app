@@ -35,6 +35,7 @@ patch -p1 < bsp/at32/at32f405-app/patches/usb_dc_dwc2.patch
 patch -p1 < bsp/at32/at32f405-app/patches/drv_hard_i2c.patch
 patch -p1 < bsp/at32/at32f405-app/patches/drv_spi.patch
 patch -p1 < bsp/at32/at32f405-app/patches/at32f402_405_can.patch
+patch -p1 < bsp/at32/at32f405-app/patches/dma_config.patch
 ```
 ### environment
 Set up the [xpack](https://github.com/xpack-dev-tools/arm-none-eabi-gcc-xpack/releases/tag/v12.3.1-1.2) arm-none-eabi-gcc compiler.
