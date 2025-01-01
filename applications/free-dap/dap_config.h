@@ -8,12 +8,21 @@
 
 /*- Includes ----------------------------------------------------------------*/
 #include "hal_config.h"
+/* for CONFIG_USB_HS */
+#include "usb_desc.h"
+#ifdef PKG_USING_BLACKMAGIC
+extern void platform_init(void);
+#endif
 
 /*- Definitions -------------------------------------------------------------*/
 #define DAP_CONFIG_DEFAULT_PORT        DAP_PORT_SWD
 #define DAP_CONFIG_DEFAULT_CLOCK       1000000 // Hz
 
+#ifdef CONFIG_USB_HS
 #define DAP_CONFIG_PACKET_SIZE         512
+#else
+#define DAP_CONFIG_PACKET_SIZE         64
+#endif
 #define DAP_CONFIG_PACKET_COUNT        2
 
 #define DAP_CONFIG_JTAG_DEV_COUNT      8
@@ -31,11 +40,11 @@
 #define DAP_CONFIG_PERFORMANCE_ATTR
 
 // A value at which dap_clock_test() produces 1 kHz output on the SWCLK pin
-#define DAP_CONFIG_DELAY_CONSTANT      10000
+#define DAP_CONFIG_DELAY_CONSTANT      14300
 
 // A threshold for switching to fast clock (no added delays)
 // This is the frequency produced by dap_clock_test(1) on the SWCLK pin
-#define DAP_CONFIG_FAST_CLOCK          2500000
+#define DAP_CONFIG_FAST_CLOCK          910000
 
 /*- Prototypes --------------------------------------------------------------*/
 extern uint8_t usb_serial_number[13];
@@ -157,6 +166,10 @@ static inline void DAP_CONFIG_SWDIO_TMS_out(void)
 //-----------------------------------------------------------------------------
 static inline void DAP_CONFIG_SETUP(void)
 {
+#ifdef PKG_USING_BLACKMAGIC
+  /* set up jtag the same way as black magic probe */
+  platform_init();
+#else
   DAP_config();
   HAL_GPIO_SWCLK_TCK_in();
   HAL_GPIO_SWDIO_TMS_in();
@@ -165,17 +178,23 @@ static inline void DAP_CONFIG_SETUP(void)
   HAL_GPIO_TDO_in();
   HAL_GPIO_TDI_in();
 #endif
+#endif
 }
 
 //-----------------------------------------------------------------------------
 static inline void DAP_CONFIG_DISCONNECT(void)
 {
+#ifdef PKG_USING_BLACKMAGIC
+  /* leave jtag the same way as black magic probe */
+  platform_init();
+#else
   HAL_GPIO_SWCLK_TCK_in();
   HAL_GPIO_SWDIO_TMS_in();
   HAL_GPIO_nRESET_in();
 #ifdef DAP_CONFIG_ENABLE_JTAG
   HAL_GPIO_TDO_in();
   HAL_GPIO_TDI_in();
+#endif
 #endif
 }
 
@@ -222,6 +241,10 @@ static inline void DAP_CONFIG_LED(int index, int state)
 {
   (void)index;
   (void)state;
+#if 1
+  if (index == 0)
+    rt_pin_write(LED0_PIN, state ? PIN_LOW : PIN_HIGH);
+#endif
 }
 
 //-----------------------------------------------------------------------------

@@ -40,7 +40,7 @@
 #define MSC_MAX_MPS 64
 #endif
 
-void cdc_acm_msc_init(uint8_t busid, uint32_t reg_base);
+void cdc_acm_init(uint8_t busid, uint32_t reg_base);
 void dap_configured(uint8_t busid);
 void dap_out_callback(uint8_t busid, uint8_t ep, uint32_t nbytes);
 void dap_in_callback(uint8_t busid, uint8_t ep, uint32_t nbytes);

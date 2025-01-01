@@ -21,9 +21,7 @@
 int main(void)
 {
     rt_kprintf("boot\r\n");
-    //ds3231_sync();
-    app_sdcard_init();
-    //app_gdb_server_init();
+    ds3231_sync();
 
     while (1)
     {

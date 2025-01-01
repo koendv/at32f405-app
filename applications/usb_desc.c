@@ -5,7 +5,6 @@
  */
 #include "usbd_core.h"
 #include "usbd_cdc.h"
-#include "usbd_msc.h"
 #include "dap_config.h"
 #include "usb_desc.h"
 
@@ -33,8 +32,8 @@
 
 /*!< config descriptor size */
 #define CMSIS_DAP_INTERFACE_SIZE (9 + 7 + 7)
-#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN * 2 + MSC_DESCRIPTOR_LEN)
-#define INTF_NUM                 6
+#define USB_CONFIG_SIZE          (9 + CMSIS_DAP_INTERFACE_SIZE + CDC_ACM_DESCRIPTOR_LEN * 2)
+#define INTF_NUM                 5
 
 static const uint8_t device_descriptor[] = {
     USB_DEVICE_DESCRIPTOR_INIT(USB_2_1, 0xEF, 0x02, 0x01, USBD_VID, USBD_PID, 0x0100, 0x01)};
@@ -46,7 +45,6 @@ static const uint8_t config_descriptor[] = {
     USB_ENDPOINT_DESCRIPTOR_INIT(DAP_IN_EP, USB_ENDPOINT_TYPE_BULK, DAP_PACKET_SIZE, 0x00),
     CDC_ACM_DESCRIPTOR_INIT(CDC0_INTF, CDC0_INT_EP, CDC0_OUT_EP, CDC0_IN_EP, CDC_MAX_MPS, 0x06),
     CDC_ACM_DESCRIPTOR_INIT(CDC1_INTF, CDC1_INT_EP, CDC1_OUT_EP, CDC1_IN_EP, CDC_MAX_MPS, 0x07),
-    MSC_DESCRIPTOR_INIT(MSC_INTF, MSC_OUT_EP, MSC_IN_EP, MSC_MAX_MPS, 0x08),
 };
 
 static const uint8_t device_quality_descriptor[] = {
@@ -243,7 +241,7 @@ static const char *string_descriptor_callback(uint8_t speed, uint8_t index)
     return string_descriptors[index];
 }
 
-const struct usb_descriptor cdc_msc_descriptor = {
+const struct usb_descriptor cdc_descriptor = {
     .device_descriptor_callback         = device_descriptor_callback,
     .config_descriptor_callback         = config_descriptor_callback,
     .device_quality_descriptor_callback = device_quality_descriptor_callback,
@@ -311,9 +309,9 @@ static struct usbd_interface cdc1_intf0;
 static struct usbd_interface cdc1_intf1;
 static struct usbd_interface msc_intf;
 
-void cdc_acm_msc_init(uint8_t busid, uint32_t reg_base)
+void cdc_acm_init(uint8_t busid, uint32_t reg_base)
 {
-    usbd_desc_register(busid, &cdc_msc_descriptor);
+    usbd_desc_register(busid, &cdc_descriptor);
 
     usbd_add_interface(busid, &dap_intf);
     usbd_add_endpoint(busid, &dap_out_ep);
@@ -328,8 +326,6 @@ void cdc_acm_msc_init(uint8_t busid, uint32_t reg_base)
     usbd_add_interface(busid, usbd_cdc_acm_init_intf(busid, &cdc1_intf1));
     usbd_add_endpoint(busid, &cdc1_out_ep);
     usbd_add_endpoint(busid, &cdc1_in_ep);
-
-    usbd_add_interface(busid, usbd_msc_init_intf(busid, &msc_intf, MSC_OUT_EP, MSC_IN_EP));
 
     usbd_initialize(busid, reg_base, usbd_event_handler);
 }

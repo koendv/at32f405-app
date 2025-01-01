@@ -1,0 +1,13 @@
+diff --git a/cmb_port.c b/cmb_port.c
+index b780745..10bad08 100644
+--- a/cmb_port.c
++++ b/cmb_port.c
+@@ -282,7 +282,7 @@ int rt_cm_backtrace_init(void) {
+         return 0;
+     }
+ 
+-    cm_backtrace_init("rt-thread","1.0","1.0");
++    cm_backtrace_init("rtthread","1.0","1.0");
+     
+     rt_hw_exception_install(exception_hook);
+ 

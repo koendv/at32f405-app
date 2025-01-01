@@ -65,11 +65,17 @@ static inline int HAL_GPIO_SWDIO_TMS_read()
 
 static inline void HAL_GPIO_SWDIO_TMS_out()
 {
+#ifdef TMS_DIR_PIN
+    rt_pin_write(TMS_DIR_PIN, PIN_HIGH);
+#endif
     rt_pin_mode(SWDIO_PIN, PIN_MODE_OUTPUT);
 }
 
 static inline void HAL_GPIO_SWDIO_TMS_in()
 {
+#ifdef TMS_DIR_PIN
+    rt_pin_write(TMS_DIR_PIN, PIN_LOW);
+#endif
     rt_pin_mode(SWDIO_PIN, PIN_MODE_INPUT);
 }
 

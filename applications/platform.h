@@ -5,6 +5,7 @@
 #include <time.h>
 #include <strings.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 #include <rtthread.h>
 #include <rtdevice.h>
@@ -13,7 +14,7 @@
 
 extern bool running_status;
 
-#define PLATFORM_IDENT "rt-thread "
+#define PLATFORM_IDENT "AT32F405 "
 
 /*
  The SWD and JTAG frequency is controlled by a delay loop.
@@ -35,11 +36,31 @@ extern bool running_status;
 
  These are the speeds when using rt_pin_write().
  Higher speeds are possible writing to registers directly.
+
+ TODO: optimize writing to flash using dma to gpio. (ST AN4666, Artery AN0123)
  */
 
 #define BLACKMAGIC_DELAY_CONSTANT 14300
 #define BLACKMAGIC_FASTCLOCK      910000
 
+#if 1
+/* aux serial port - connect to target console */
+#define AUX_UART          "uart2"
+#define AUX_DEFAULT_SPEED 115200U
+#define AUX_RX_BUFSIZE    BSP_UART2_RX_BUFSIZE
+#endif
+
+#if 1
+/* rtt input and output via usb cdc1 */
+#define RTT_IN_CDC1
+#define RTT_UP_BUF_SIZE   (2048U + 8U)
+#define RTT_DOWN_BUF_SIZE 256U
+#endif
+
+#if 0
+#define PLATFORM_HAS_TRACESWO
+#define SWO_ENCODING   2
+#endif
 
 #define LED_IDLE_RUN LED0_PIN
 
