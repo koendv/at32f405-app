@@ -10,7 +10,11 @@
 
 #include "rtthread.h"
 
+#if 0
 #define CONFIG_USB_PRINTF(...) rt_kprintf(__VA_ARGS__)
+#else
+#define CONFIG_USB_PRINTF(...)
+#endif
 
 #define usb_malloc(size) rt_malloc(size)
 #define usb_free(ptr)    rt_free(ptr)
