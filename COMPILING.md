@@ -32,7 +32,6 @@ patch -p0 < ../../patches/lvgl-9.1.0-rtthread.patch
 # back to rt-thread top
 cd ../../../../..
 patch -p1 < bsp/at32/at32f405-app/patches/usb_dc_dwc2.patch
-patch -p1 < bsp/at32/at32f405-app/patches/drv_hard_i2c.patch
 patch -p1 < bsp/at32/at32f405-app/patches/drv_spi.patch
 patch -p1 < bsp/at32/at32f405-app/patches/at32f402_405_can.patch
 patch -p1 < bsp/at32/at32f405-app/patches/dma_config.patch
