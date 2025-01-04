@@ -172,6 +172,26 @@
 
 /* Utilities */
 
+#define RT_USING_ULOG
+#define ULOG_OUTPUT_LVL_D
+#define ULOG_OUTPUT_LVL 7
+#define ULOG_USING_ISR_LOG
+#define ULOG_ASSERT_ENABLE
+#define ULOG_LINE_BUF_SIZE 128
+#define ULOG_USING_ASYNC_OUTPUT
+#define ULOG_ASYNC_OUTPUT_BUF_SIZE 2048
+#define ULOG_ASYNC_OUTPUT_BY_THREAD
+#define ULOG_ASYNC_OUTPUT_THREAD_STACK 1024
+#define ULOG_ASYNC_OUTPUT_THREAD_PRIORITY 30
+
+/* log format */
+
+#define ULOG_USING_COLOR
+#define ULOG_OUTPUT_TIME
+#define ULOG_OUTPUT_LEVEL
+#define ULOG_OUTPUT_TAG
+/* end of log format */
+#define ULOG_BACKEND_USING_CONSOLE
 /* end of Utilities */
 
 /* Using USB legacy version */

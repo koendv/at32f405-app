@@ -1,5 +1,8 @@
 #include <rtthread.h>
 #include <rtdevice.h>
+#define DBG_TAG "PINOUT"
+#define DBG_LVL DBG_INFO
+#include <rtdbg.h>
 #include "drv_common.h"
 #include "drv_gpio.h"
 
@@ -17,9 +20,9 @@ static int app_gpio_init(void)
 
     rt_pin_mode(RTC_WKUP_PIN, PIN_MODE_INPUT);
     if (rt_pin_read(RTC_WKUP_PIN) == PIN_LOW)
-        rt_kprintf("rtc wkup low\r\n");
+        LOG_I("rtc wkup low");
     else
-        rt_kprintf("rtc wkup high\r\n"); // XXX
+        LOG_I("rtc wkup high"); // XXX
 
     return RT_EOK;
 }

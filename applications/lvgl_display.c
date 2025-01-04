@@ -6,6 +6,10 @@
 #include "lvgl.h"
 #include "lv_st7789.h"
 
+#define DBG_TAG "DISP"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
+
 /*
    Writing to the display is done in the background.
    This way, the cpu can calculate and send pixels at the same time.
@@ -67,7 +71,7 @@ void lv_port_disp_init()
 
     /* set up draw buffers */
     uint32_t buf_size = LCD_H_RES * LCD_BUF_LINES * lv_color_format_get_size(lv_display_get_color_format(lcd_disp));
-    // rt_kprintf("lvgl buf size %d bytes\r\n", buf_size);
+    LOG_I("lvgl buf size %d bytes", buf_size);
 
     buf1 = lv_malloc(buf_size);
     LV_ASSERT_MALLOC(buf1);
@@ -123,7 +127,7 @@ static int32_t lcd_io_init(void)
     spi_dev = (struct rt_spi_device *)rt_device_find(SPI_DEV);
     if (spi_dev == RT_NULL)
     {
-        rt_kprintf("spi abort\r\n");
+        LOG_E("spi abort");
         return -RT_ERROR;
     }
     rt_spi_configure(spi_dev, &spi_cfg_8bit);

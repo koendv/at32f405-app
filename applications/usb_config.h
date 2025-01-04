@@ -10,24 +10,17 @@
 
 #include "rtthread.h"
 
-#if 0
-#define CONFIG_USB_PRINTF(...) rt_kprintf(__VA_ARGS__)
-#else
-#define CONFIG_USB_PRINTF(...)
-#endif
+#define DBG_TAG "USB"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
+
+#define CONFIG_USB_DBG_LEVEL USB_DBG_WARNING
+#define CONFIG_USB_PRINTF(...) LOG_E(__VA_ARGS__)
 
 #define usb_malloc(size) rt_malloc(size)
 #define usb_free(ptr)    rt_free(ptr)
 
 #define memcpy rt_memcpy
-
-#if 0
-#define CONFIG_USB_DBG_LEVEL USB_DBG_INFO
-#endif
-
-#ifndef CONFIG_USB_DBG_LEVEL
-#define CONFIG_USB_DBG_LEVEL USB_DBG_WARN
-#endif
 
 /* Enable print with color */
 #define CONFIG_USB_PRINTF_COLOR_ENABLE

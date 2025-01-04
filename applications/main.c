@@ -12,7 +12,10 @@
 #include <rtdevice.h>
 #include "drv_common.h"
 #include "drv_gpio.h"
-#include "usbd_core.h"
+
+#define DBG_TAG "MAIN"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
 
 #include "pinout.h"
 #include "app.h"
@@ -20,7 +23,7 @@
 
 int main(void)
 {
-    rt_kprintf("boot\r\n");
+    LOG_I("boot");
     ds3231_sync();
 
     while (1)

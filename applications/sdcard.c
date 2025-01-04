@@ -6,6 +6,10 @@
 #include "board.h"
 #include "pinout.h"
 
+#define DBG_TAG "SD"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
+
 #define SD_DEVICE         "sd0"
 #define SD_DIR            "/"
 #define SD_SPI_BUS        "spi2"
@@ -29,7 +33,7 @@ static void sdcard_mount()
         if (sdcard_mounted)
             return;
 
-        rt_kprintf("sdcard mount\r\n");
+        LOG_I("sdcard mount");
 
         rt_pin_write(SD_CS_PIN, PIN_HIGH); // sdcard chip select off
         rt_thread_mdelay(10);
@@ -41,33 +45,33 @@ static void sdcard_mount()
         err = rt_hw_spi_device_attach(SD_SPI_BUS, SD_SPI_DEV, SD0_CS_GPIO, SD0_CS_GPIO_PIN);
         if (err != RT_EOK)
         {
-            rt_kprintf("spi attach fail\r\n");
+            LOG_E("spi attach fail");
             return;
         }
 
         err = msd_init(SD_DEVICE, SD_SPI_DEV);
         if (err != RT_EOK)
         {
-            rt_kprintf("sd card msd init fail\r\n");
+            LOG_E("sd card msd init fail");
             return;
         }
 
         err = dfs_mount(SD_DEVICE, SD_DIR, "elm", 0, 0);
         if (err != RT_EOK)
         {
-            rt_kprintf("[E/SD] sd card mount fail\r\n");
+            LOG_E("sd card mount fail");
             return;
         }
 
         sdcard_mounted = true;
 
-        rt_kprintf("[I/SD] sd card mounted\r\n");
+        LOG_I("sd card mounted");
     }
     else
     {
         if (sdcard_mounted)
         {
-            rt_kprintf("sdcard unmount\r\n");
+            LOG_I("sdcard unmount");
 
             dfs_unmount(SD_DIR);               // unmount
             rt_pin_write(SD_CS_PIN, PIN_HIGH); // sdcard chip select off

@@ -13,6 +13,10 @@
 #include <sys/time.h>
 #include <stdlib.h>
 
+#define DBG_TAG "RTC"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
+
 #define DS3231_ADDR    0x68   /* i2c address */
 
 #ifdef BSP_USING_HARD_I2C1
@@ -87,7 +91,7 @@ static rt_err_t ds3231_write_reg(rt_uint8_t reg, rt_uint8_t *data, rt_uint8_t da
     }
     else
     {
-        rt_kprintf("i2c write error\r\n");
+        LOG_E("i2c write error");
         return -RT_ERROR;
     }
 }
@@ -117,7 +121,7 @@ static rt_err_t ds3231_read_reg(rt_uint8_t reg, rt_uint8_t *data, rt_uint8_t dat
     }
     else
     {
-        rt_kprintf("i2c read error\r\n");
+        LOG_E("i2c read error");
         return -RT_ERROR;
     }
 }
@@ -140,7 +144,7 @@ void ds3231_sync()
     ret = ds3231_read_reg(DS3231_REG_CONTROL, buff, 2);
     if (ret != RT_EOK)
     {
-        rt_kprintf("ds3231: i2c error\r\n");
+        LOG_E("ds3231: i2c error");
         return;
     }
     control_reg = buff[0];
@@ -154,8 +158,8 @@ void ds3231_sync()
     }
     if (status_reg & 0x80)
     { // ds3231 time invalid?
-        rt_kprintf("ds3231: control %02x status %02x\r\n", control_reg, status_reg);
-        rt_kprintf("check clock battery\r\n");
+        LOG_W("ds3231: control %02x status %02x", control_reg, status_reg);
+        LOG_W("check clock battery");
         return;
     }
 
@@ -171,17 +175,17 @@ void ds3231_sync()
     sec  = bcd_to_bin(buff[0]);
 
 #if 0
-    rt_kprintf("year: %d\r\n", year);
-    rt_kprintf("month: %d\r\n", mon);
-    rt_kprintf("day: %d\r\n", mday);
-    rt_kprintf("hour: %d\r\n", hour);
-    rt_kprintf("min: %d\r\n", min);
-    rt_kprintf("sec: %d\r\n", sec);
+    LOG_D("year: %d", year);
+    LOG_D("month: %d", mon);
+    LOG_D("day: %d", mday);
+    LOG_D("hour: %d", hour);
+    LOG_D("min: %d", min);
+    LOG_D("sec: %d", sec);
 #endif
 
     if ((year <= 0) || (mon > 11) || (mday == 0) || (mday > 31) || (hour > 23) || (min > 59) || (sec > 60))
     {
-        rt_kprintf("ds3231 date error\n");
+        LOG_E("ds3231 date error");
         return;
     }
 
@@ -194,7 +198,7 @@ void ds3231_sync()
 #if 0
     if (ret != RT_EOK)
     {
-        rt_kprintf("rtc already set\r\n");
+        LOG_I("rtc already set");
     }
 #endif
     return;

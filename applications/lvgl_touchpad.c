@@ -10,6 +10,10 @@
 #include "lv_nopoll.h"
 #include "lvgl_touchpad.h"
 
+#define DBG_TAG "TOUCH"
+#define DBG_LVL DBG_ERR
+#include <rtdbg.h>
+
 #define I2C_ADDRESS 0x15
 
 #ifdef BSP_USING_HARD_I2C1
@@ -154,7 +158,7 @@ static void cst816t_thread()
     RT_ASSERT(i2c_bus);
     if (rt_device_open(&i2c_bus->parent, RT_DEVICE_OFLAG_RDWR) != RT_EOK)
     {
-        rt_kprintf("cst816t: open i2c device failed.\n");
+        LOG_E("cst816t: open i2c device failed.");
         return;
     }
     /* detect gestures, including long press and double click */
@@ -162,7 +166,7 @@ static void cst816t_thread()
         (cst816x_write(REG_MOTION_MASK, MOTION_MASK_DOUBLE_CLICK) != RT_EOK) ||
         (cst816x_write(REG_DIS_AUTOSLEEP, 0xFF) != RT_EOK))
     {
-        rt_kprintf("cst816t: i2c write failed.\n");
+        LOG_E("cst816t: i2c write failed.");
         return;
     }
 
@@ -181,7 +185,7 @@ static void cst816t_thread()
         tp.y       = (((uint32_t)rx_data[4] & 0x0F) << 8) | (uint32_t)rx_data[5];
         rt_mq_send(touchpad_mq, &tp, sizeof(tp));
 #if 0
-        rt_kprintf("cst816t: gesture %d fingers %d x %d y %d\r\n", tp.gesture, tp.fingers, tp.x, tp.y);
+        LOG_I("cst816t: gesture %d fingers %d x %d y %d", tp.gesture, tp.fingers, tp.x, tp.y);
 #endif
     }
 }
