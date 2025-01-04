@@ -14,7 +14,7 @@
 #include "drv_gpio.h"
 
 #define DBG_TAG "MAIN"
-#define DBG_LVL DBG_ERR
+#define DBG_LVL DBG_LOG
 #include <rtdbg.h>
 
 #include "pinout.h"
